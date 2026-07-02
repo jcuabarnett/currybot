@@ -1,4 +1,4 @@
-const CACHE = 'currybot-v1';
+const CACHE = 'currybot-v2';
 
 const SHELL = [
   '/',

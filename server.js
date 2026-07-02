@@ -54,7 +54,14 @@ function avg(arr) {
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-app.use(express.json());
+// Admin status is derived from name, not stored, so it can't be spoofed via a client-supplied flag.
+function isAdminName(name) {
+  return !!name && name.trim().toLowerCase() === 'johnny';
+}
+
+const MAX_PHOTO_LEN = 6 * 1024 * 1024; // ~6MB data-URI safety cap
+
+app.use(express.json({ limit: '8mb' }));
 
 // Service worker must be served from root scope with correct headers
 app.get('/sw.js', (req, res) => {
@@ -79,7 +86,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // ── Users ──────────────────────────────────────────────────
 app.get('/api/users', (req, res) => {
-  res.json(loadData().users);
+  res.json(loadData().users.map(u => ({ ...u, isAdmin: isAdminName(u.name) })));
 });
 
 app.post('/api/users', (req, res) => {
@@ -88,12 +95,12 @@ app.post('/api/users', (req, res) => {
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
 
   const existing = data.users.find(u => u.name.toLowerCase() === name.trim().toLowerCase());
-  if (existing) return res.json(existing);
+  if (existing) return res.json({ ...existing, isAdmin: isAdminName(existing.name) });
 
   const user = { id: Date.now(), name: name.trim(), emoji: emoji || '🍛', joined: new Date().toISOString() };
   data.users.push(user);
   saveData(data);
-  res.json(user);
+  res.json({ ...user, isAdmin: isAdminName(user.name) });
 });
 
 // ── Restaurants ────────────────────────────────────────────
@@ -174,6 +181,77 @@ app.post('/api/ratings', (req, res) => {
   data.ratings.push(rating);
   saveData(data);
   res.json(rating);
+});
+
+app.put('/api/ratings/:id', (req, res) => {
+  const data = loadData();
+  const id = Number(req.params.id);
+  const rating = data.ratings.find(r => r.id === id);
+  if (!rating) return res.status(404).json({ error: 'Rating not found' });
+
+  const { requestingUser, poppadoms, main, price, vibe, service, notes, visitDate } = req.body;
+  if (requestingUser !== rating.userName && !isAdminName(requestingUser)) {
+    return res.status(403).json({ error: 'Only the original rater or an admin can amend this rating' });
+  }
+
+  for (const [key, val] of Object.entries({ poppadoms, main, price, vibe, service })) {
+    if (val === undefined || val === null || Number(val) < 0 || Number(val) > 10) {
+      return res.status(400).json({ error: `Invalid score for ${key}` });
+    }
+  }
+
+  rating.poppadoms = Number(poppadoms);
+  rating.main      = Number(main);
+  rating.price     = Number(price);
+  rating.vibe      = Number(vibe);
+  rating.service   = Number(service);
+  rating.notes     = notes || '';
+  rating.visitDate = visitDate || rating.visitDate;
+  rating.editedAt  = new Date().toISOString();
+  rating.editedBy  = requestingUser;
+
+  saveData(data);
+  res.json(rating);
+});
+
+app.delete('/api/ratings/:id', (req, res) => {
+  const data = loadData();
+  const id = Number(req.params.id);
+  const idx = data.ratings.findIndex(r => r.id === id);
+  if (idx === -1) return res.status(404).json({ error: 'Rating not found' });
+
+  const { requestingUser } = req.body || {};
+  const rating = data.ratings[idx];
+  if (requestingUser !== rating.userName && !isAdminName(requestingUser)) {
+    return res.status(403).json({ error: 'Only the original rater or an admin can delete this rating' });
+  }
+
+  data.ratings.splice(idx, 1);
+  saveData(data);
+  res.json({ success: true });
+});
+
+// ── Restaurant photos ────────────────────────────────────────
+app.patch('/api/restaurants/:id/photo', (req, res) => {
+  const data = loadData();
+  const id = Number(req.params.id);
+  const restaurant = data.restaurants.find(r => r.id === id);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
+
+  const { type, image } = req.body;
+  if (type !== 'profile' && type !== 'group') {
+    return res.status(400).json({ error: 'type must be "profile" or "group"' });
+  }
+  if (!image || typeof image !== 'string' || !image.startsWith('data:image/')) {
+    return res.status(400).json({ error: 'image must be an image data URI' });
+  }
+  if (image.length > MAX_PHOTO_LEN) return res.status(400).json({ error: 'Image too large' });
+
+  if (type === 'profile') restaurant.photoUrl = image;
+  else restaurant.groupPhotoUrl = image;
+
+  saveData(data);
+  res.json(restaurant);
 });
 
 // ── Stats ──────────────────────────────────────────────────

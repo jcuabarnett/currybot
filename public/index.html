@@ -440,7 +440,7 @@
   <!-- ── RATE ─────────────────────────────────────────── -->
   <div id="view-rate" class="view">
     <div class="form-card">
-      <h2 class="form-title">⭐ Rate a Curry House</h2>
+      <h2 class="form-title" id="rate-form-title">⭐ Rate a Curry House</h2>
       <div class="form-group">
         <label>Restaurant</label>
         <select id="rate-restaurant"><option value="">Select a restaurant…</option></select>
@@ -464,7 +464,8 @@
         <label>Notes (optional)</label>
         <textarea id="rate-notes" placeholder="Any memorable moments? Did someone order something deeply regrettable?"></textarea>
       </div>
-      <button class="btn" onclick="submitRating()" style="width:100%">Submit Rating 🍛</button>
+      <button class="btn" id="rate-submit-btn" onclick="submitRating()" style="width:100%">Submit Rating 🍛</button>
+      <button class="btn btn-outline" id="rate-cancel-btn" onclick="cancelEditRating()" style="width:100%;margin-top:.6rem;display:none">Cancel Edit</button>
     </div>
   </div>
 
@@ -562,7 +563,7 @@
 // ═══════════════════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════════════════
-const state = { user: null, restaurants: [], users: [], stats: null, view: 'leaderboard' };
+const state = { user: null, restaurants: [], users: [], stats: null, view: 'leaderboard', editingRating: null };
 
 // ═══════════════════════════════════════════════════════════
 // CONSTANTS
@@ -682,6 +683,7 @@ async function loadAll() {
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════
 function navigate(view) {
+  if (view !== 'rate') state.editingRating = null;
   state.view = view;
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -795,6 +797,7 @@ function renderLeaderboard() {
       <div class="restaurant-card ${top3?'rank-'+rank:''} animate-in" style="animation-delay:${i*.04}s" onclick="showDetail(${r.id})">
         <div class="card-top">
           ${badge.emoji ? `<div class="rank-badge">${badge.emoji}</div>` : `<div class="rank-num">#${rank}</div>`}
+          ${r.photoUrl ? `<img src="${r.photoUrl}" style="width:2.6rem;height:2.6rem;border-radius:8px;object-fit:cover;flex-shrink:0">` : ''}
           <div class="card-info">
             <div class="restaurant-name">${esc(r.name)}</div>
             <div class="restaurant-meta">
@@ -848,13 +851,19 @@ function showDetail(id) {
       ${r.ratings.map(rt => {
         const ov = (rt.poppadoms+rt.main+rt.price+rt.vibe+rt.service)/5;
         const u  = state.users.find(u => u.name === rt.userName);
+        const canManage = !!(state.user && (state.user.name === rt.userName || state.user.isAdmin));
         return `
           <div class="rater-row">
             <div class="rater-avatar">${u?u.emoji:'🍛'}</div>
             <div style="flex:1;min-width:0">
-              <div class="rater-name">${esc(rt.userName)}</div>
+              <div class="rater-name">${esc(rt.userName)}${rt.editedBy && rt.editedBy!==rt.userName?` <span style="color:var(--text-muted);font-size:.66rem;font-weight:400">(edited by ${esc(rt.editedBy)})</span>`:''}</div>
               <div class="rater-scores-mini">${Object.entries(METRICS).map(([k,m])=>`<div class="mini-score">${m.emoji}${rt[k]}</div>`).join('')}</div>
               ${rt.notes?`<div style="font-size:.7rem;color:var(--text-muted);margin-top:.22rem;font-style:italic">"${esc(rt.notes)}"</div>`:''}
+              ${canManage?`
+                <div style="display:flex;gap:.5rem;margin-top:.4rem">
+                  <button class="btn btn-sm btn-outline" onclick="editRating(${rt.id})">✏️ Edit</button>
+                  <button class="btn btn-sm btn-outline" style="color:var(--red);border-color:var(--red)" onclick="deleteRating(${rt.id},${r.id})">🗑️ Delete</button>
+                </div>`:''}
             </div>
             <div class="rater-score">${fmt(ov)}</div>
           </div>`;
@@ -862,12 +871,35 @@ function showDetail(id) {
     </div>` :
     `<div style="color:var(--text-dim);font-size:.81rem;margin-top:.6rem">No ratings yet — be the first!</div>`;
 
+  const photosHtml = `
+    <hr class="divider">
+    <div style="font-size:.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:.6rem">📸 Photos</div>
+    <div class="two-col">
+      <div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:.4rem">Restaurant Photo</div>
+        ${r.photoUrl?`<img src="${r.photoUrl}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-bottom:.5rem">`:''}
+        <label class="btn btn-outline btn-sm" style="display:block;text-align:center;cursor:pointer">
+          ${r.photoUrl?'Change Photo':'Add Photo'}
+          <input type="file" accept="image/*" style="display:none" onchange="uploadRestaurantPhoto(${r.id},'profile',this)">
+        </label>
+      </div>
+      <div>
+        <div style="font-size:.76rem;color:var(--text-muted);margin-bottom:.4rem">Group Memory 👨‍👩‍👧‍👦</div>
+        ${r.groupPhotoUrl?`<img src="${r.groupPhotoUrl}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-bottom:.5rem">`:''}
+        <label class="btn btn-outline btn-sm" style="display:block;text-align:center;cursor:pointer">
+          ${r.groupPhotoUrl?'Change Photo':'Add Photo'}
+          <input type="file" accept="image/*" style="display:none" onchange="uploadRestaurantPhoto(${r.id},'group',this)">
+        </label>
+      </div>
+    </div>`;
+
   const commentaryHtml = r.avgScores ? `
     <div class="commentary">${Object.entries(METRICS).map(([k,m])=>
       `<p style="margin-bottom:.32rem"><strong style="color:var(--accent)">${m.emoji} ${m.label}:</strong> ${commentary(k,r.avgScores[k])}</p>`
     ).join('')}</div>` : '';
 
   document.getElementById('modal-content').innerHTML = `
+    ${r.photoUrl?`<img src="${r.photoUrl}" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px;margin-bottom:1rem">`:''}
     <div style="display:flex;align-items:flex-start;gap:.9rem;margin-bottom:1rem;flex-wrap:wrap">
       <div style="flex:1;min-width:0">
         <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px">Curry House</div>
@@ -906,6 +938,7 @@ function showDetail(id) {
     </div>
     ${ratingsHtml}
     ${commentaryHtml}
+    ${photosHtml}
     <div style="margin-top:.9rem">
       <button class="btn" onclick="closeDetailModal();navigate('rate')" style="width:100%">Rate This Restaurant ⭐</button>
     </div>`;
@@ -943,6 +976,46 @@ function closeDetailModal() {
 function closeModalOverlay(e, id, fn) { if (e.target === document.getElementById(id)) fn(); }
 
 // ═══════════════════════════════════════════════════════════
+// RESTAURANT PHOTOS
+// ═══════════════════════════════════════════════════════════
+function compressImage(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round(height*maxDim/width); width = maxDim; }
+        else if (height > maxDim) { width = Math.round(width*maxDim/height); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadRestaurantPhoto(restaurantId, type, inputEl) {
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  try {
+    showToast('📤 Uploading photo…');
+    const dataUrl = await compressImage(file, 1000, 0.75);
+    await api('PATCH', `/restaurants/${restaurantId}/photo`, { type, image: dataUrl });
+    await loadAll();
+    showToast('✅ Photo updated!');
+    showDetail(restaurantId);
+    if (state.view === 'leaderboard') renderLeaderboard();
+  } catch(e) { showToast('❌ '+e.message); }
+  finally { inputEl.value = ''; }
+}
+
+// ═══════════════════════════════════════════════════════════
 // RATE FORM
 // ═══════════════════════════════════════════════════════════
 function renderRateForm() {
@@ -970,6 +1043,13 @@ function renderRateForm() {
     </div>`).join('');
 
   updateScorePreview();
+
+  const editing = !!state.editingRating;
+  document.getElementById('rate-form-title').textContent = editing ? '✏️ Editing Rating' : '⭐ Rate a Curry House';
+  document.getElementById('rate-submit-btn').textContent = editing ? 'Save Changes ✏️' : 'Submit Rating 🍛';
+  document.getElementById('rate-cancel-btn').style.display = editing ? 'block' : 'none';
+  document.getElementById('rate-restaurant').disabled = editing;
+  document.getElementById('rate-user').disabled = editing;
 }
 
 function updateSlider(key, value) {
@@ -998,6 +1078,14 @@ async function submitRating() {
   for (const key of Object.keys(METRICS)) scores[key] = parseFloat(document.getElementById('slider-'+key).value);
 
   try {
+    if (state.editingRating) {
+      await api('PUT',`/ratings/${state.editingRating.id}`,{requestingUser:state.user.name,...scores,notes,visitDate});
+      await loadAll();
+      showToast('✏️ Rating updated!');
+      state.editingRating = null;
+      navigate('leaderboard');
+      return;
+    }
     await api('POST','/ratings',{restaurantId,userName,...scores,notes,visitDate});
     await loadAll();
     const ov = avg(Object.values(scores));
@@ -1008,6 +1096,42 @@ async function submitRating() {
     else msg+="Our deepest condolences. That's why we log these things.";
     showToast(msg);
     navigate('leaderboard');
+  } catch(e) { showToast('❌ '+e.message); }
+}
+
+function editRating(ratingId) {
+  let rating, restaurant;
+  for (const r of state.restaurants) {
+    const found = (r.ratings||[]).find(rt=>rt.id===ratingId);
+    if (found) { rating = found; restaurant = r; break; }
+  }
+  if (!rating || !restaurant) return;
+  state.editingRating = { id: ratingId, restaurantId: restaurant.id };
+  closeDetailModal();
+  navigate('rate');
+  document.getElementById('rate-restaurant').value = restaurant.id;
+  document.getElementById('rate-user').value = rating.userName;
+  document.getElementById('rate-date').value = rating.visitDate;
+  document.getElementById('rate-notes').value = rating.notes || '';
+  for (const key of Object.keys(METRICS)) {
+    document.getElementById('slider-'+key).value = rating[key];
+    updateSlider(key, rating[key]);
+  }
+}
+
+function cancelEditRating() {
+  state.editingRating = null;
+  renderRateForm();
+}
+
+async function deleteRating(ratingId, restaurantId) {
+  if (!state.user) return;
+  if (!confirm('Delete this rating? This cannot be undone.')) return;
+  try {
+    await api('DELETE',`/ratings/${ratingId}`,{requestingUser:state.user.name});
+    await loadAll();
+    showToast('🗑️ Rating deleted');
+    showDetail(restaurantId);
   } catch(e) { showToast('❌ '+e.message); }
 }
 
