@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>CurryBot 🍛</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#f5a623">
+
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CurryBot">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+
+  <!-- Favicon -->
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+
+  <!-- Fonts & Chart -->
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg:        #0a0603;
+      --bg-card:   #160e04;
+      --bg-card-2: #1e1408;
+      --border:    #3a2510;
+      --border-hi: #6b4520;
+      --accent:    #f5a623;
+      --accent-dk: #d4891a;
+      --red:       #e74c3c;
+      --green:     #27ae60;
+      --gold:      #FFD700;
+      --silver:    #b8c0c8;
+      --bronze:    #cd7f32;
+      --text:      #f0dfc0;
+      --text-dim:  #8a6040;
+      --text-muted:#5a4030;
+
+      /* Safe-area helpers */
+      --sat: env(safe-area-inset-top,    0px);
+      --sar: env(safe-area-inset-right,  0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left,   0px);
+
+      --tab-h: 62px;
+      --header-h: 54px;
+    }
+
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body { height: 100%; overscroll-behavior: none; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      background-image:
+        radial-gradient(ellipse at 20% 0%,   rgba(245,166,35,.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 100%, rgba(231,76,60,.06)  0%, transparent 50%);
+      padding-top: var(--sat);
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    .header {
+      height: var(--header-h);
+      background: rgba(10,6,3,.96);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 1rem 0 calc(1rem + var(--sal));
+      position: sticky; top: 0; z-index: 200;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.45rem; font-weight: 900;
+      color: var(--accent); letter-spacing: -.5px;
+      text-shadow: 0 0 28px rgba(245,166,35,.4);
+    }
+    .logo span { color: var(--red); }
+    .user-pill {
+      margin-left: auto;
+      background: var(--bg-card-2); border: 1px solid var(--border);
+      border-radius: 20px; padding: .3rem .65rem;
+      font-size: .8rem; cursor: pointer;
+      display: flex; align-items: center; gap: .35rem;
+      transition: border-color .2s; user-select: none;
+    }
+    .user-pill:active { border-color: var(--accent); }
+
+    /* ── Bottom tab bar ──────────────────────────────────── */
+    .tab-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+      height: calc(var(--tab-h) + var(--sab));
+      background: rgba(10,6,3,.97);
+      border-top: 1px solid var(--border);
+      display: flex;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      padding-bottom: var(--sab);
+    }
+    .tab-btn {
+      flex: 1; border: none; background: none;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .2rem; cursor: pointer; padding: .4rem .2rem;
+      color: var(--text-muted); transition: color .2s;
+      -webkit-touch-callout: none; user-select: none;
+    }
+    .tab-btn.active { color: var(--accent); }
+    .tab-btn:active { opacity: .7; }
+    .tab-icon { font-size: 1.35rem; line-height: 1; }
+    .tab-label { font-size: .62rem; font-weight: 600; letter-spacing: .3px; font-family: 'Inter', sans-serif; }
+
+    /* ── Scroll content ──────────────────────────────────── */
+    .main {
+      max-width: 700px; margin: 0 auto;
+      padding: 1rem 1rem calc(var(--tab-h) + var(--sab) + 1rem);
+      padding-left: calc(1rem + var(--sal));
+      padding-right: calc(1rem + var(--sar));
+    }
+
+    /* ── Views ───────────────────────────────────────────── */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* ── iOS install banner ──────────────────────────────── */
+    .install-banner {
+      background: var(--bg-card-2); border: 1px solid var(--border-hi);
+      border-radius: 12px; padding: .75rem 1rem;
+      margin-bottom: 1rem; font-size: .82rem; color: var(--text-dim);
+      display: flex; align-items: flex-start; gap: .65rem;
+    }
+    .install-banner .icon { font-size: 1.4rem; flex-shrink: 0; }
+    .install-banner strong { color: var(--text); display: block; margin-bottom: .2rem; }
+    .install-banner-close {
+      margin-left: auto; background: none; border: none;
+      color: var(--text-muted); font-size: 1.1rem; cursor: pointer; padding: 0 .2rem; flex-shrink: 0;
+    }
+
+    /* ── Android install prompt ──────────────────────────── */
+    .install-prompt {
+      background: linear-gradient(135deg, #1e1008 0%, #2d1a08 100%);
+      border: 1px solid var(--border-hi); border-radius: 12px;
+      padding: .85rem 1rem; margin-bottom: 1rem;
+      display: flex; align-items: center; gap: .75rem;
+    }
+    .install-prompt .text { flex: 1; font-size: .85rem; }
+    .install-prompt strong { color: var(--accent); display: block; }
+
+    /* ── Hero ────────────────────────────────────────────── */
+    .hero-card {
+      background: linear-gradient(135deg, #1e1008 0%, #2d1a08 50%, #1a0d04 100%);
+      border: 1px solid var(--border-hi); border-radius: 16px;
+      padding: 1.2rem; margin-bottom: 1.1rem;
+      position: relative; overflow: hidden;
+    }
+    .hero-card::before {
+      content:''; position: absolute; top:-40%; right:-15%;
+      width:260px; height:260px;
+      background: radial-gradient(circle, rgba(245,166,35,.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-label {
+      font-size: .7rem; font-weight: 700; letter-spacing: 1.8px;
+      text-transform: uppercase; color: var(--gold);
+      margin-bottom: .6rem; display: flex; align-items: center; gap: .4rem;
+    }
+    .hero-meta { display: flex; align-items: flex-end; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+    .hero-name { font-family: 'Playfair Display', serif; font-size: 1.7rem; font-weight: 900; line-height: 1.1; }
+    .hero-score { font-size: 3rem; font-weight: 700; color: var(--gold); line-height: 1; text-shadow: 0 0 35px rgba(255,215,0,.4); }
+    .hero-score span { font-size: 1.3rem; color: var(--text-muted); }
+    .hero-metrics { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .8rem; }
+    .metric-chip {
+      background: rgba(255,255,255,.05); border: 1px solid var(--border);
+      border-radius: 6px; padding: .3rem .6rem; font-size: .76rem;
+    }
+    .metric-chip strong { color: var(--accent); }
+
+    /* ── Stats strip ─────────────────────────────────────── */
+    .stats-strip {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr));
+      gap: .6rem; margin-bottom: 1.1rem;
+    }
+    .stat-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 10px; padding: .6rem .8rem; text-align: center;
+    }
+    .stat-value { font-size: 1.35rem; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: .66rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; margin-top: .18rem; }
+
+    /* ── Section title ───────────────────────────────────── */
+    .section-title { font-family: 'Playfair Display', serif; font-size: 1.2rem; font-weight: 700; }
+    .leaderboard-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; }
+
+    /* ── Restaurant cards ────────────────────────────────── */
+    .restaurant-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: .85rem 1rem;
+      margin-bottom: .6rem; cursor: pointer;
+      transition: border-color .15s; position: relative; overflow: hidden;
+    }
+    .restaurant-card:active { background: var(--bg-card-2); }
+    .restaurant-card.rank-1 { border-color: rgba(255,215,0,.4); }
+    .restaurant-card.rank-2 { border-color: rgba(192,192,192,.3); }
+    .restaurant-card.rank-3 { border-color: rgba(205,127,50,.3); }
+    .card-top { display: flex; align-items: center; gap: .85rem; }
+    .rank-badge { font-size: 1.4rem; width: 2.3rem; text-align: center; flex-shrink: 0; }
+    .rank-num { font-size: .86rem; font-weight: 700; color: var(--text-muted); width: 2.3rem; text-align: center; flex-shrink: 0; }
+    .card-info { flex: 1; min-width: 0; }
+    .restaurant-name { font-size: .98rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .restaurant-meta { font-size: .7rem; color: var(--text-dim); margin-top: .18rem; display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+    .score-display { text-align: right; flex-shrink: 0; }
+    .score-big { font-size: 1.65rem; font-weight: 700; line-height: 1; }
+    .score-big.gold   { color: var(--gold); }
+    .score-big.silver { color: var(--silver); }
+    .score-big.bronze { color: var(--bronze); }
+    .score-big.normal { color: var(--accent); }
+    .score-big.unrated { color: var(--text-muted); font-size: 1rem; }
+    .score-label { font-size: .66rem; color: var(--text-muted); }
+
+    /* ── Metric bars ─────────────────────────────────────── */
+    .metric-bars { margin-top: .6rem; display: grid; grid-template-columns: repeat(5,1fr); gap: .4rem; }
+    .metric-bar-label { font-size: .6rem; color: var(--text-dim); margin-bottom: .25rem; text-transform: uppercase; letter-spacing: .4px; }
+    .metric-bar-track { background: rgba(255,255,255,.06); border-radius: 3px; height: 4px; overflow: hidden; }
+    .metric-bar-fill { height: 100%; border-radius: 3px; transition: width .7s ease; }
+    .bar-poppadoms { background: linear-gradient(90deg,#f39c12,#e67e22); }
+    .bar-main      { background: linear-gradient(90deg,#e74c3c,#c0392b); }
+    .bar-price     { background: linear-gradient(90deg,#27ae60,#1abc9c); }
+    .bar-vibe      { background: linear-gradient(90deg,#8e44ad,#9b59b6); }
+    .bar-service   { background: linear-gradient(90deg,#2980b9,#3498db); }
+
+    /* ── Forms ───────────────────────────────────────────── */
+    .form-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 1.2rem;
+    }
+    .form-title { font-family: 'Playfair Display', serif; font-size: 1.3rem; font-weight: 700; margin-bottom: 1rem; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; font-size: .78rem; font-weight: 600; color: var(--text-dim); margin-bottom: .4rem; text-transform: uppercase; letter-spacing: .5px; }
+    input, select, textarea {
+      width: 100%; background: var(--bg-card-2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); padding: .6rem .85rem;
+      font-family: 'Inter', sans-serif; font-size: 16px; /* 16px prevents iOS zoom */
+      transition: border-color .2s; outline: none; -webkit-appearance: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    select option { background: #1e1408; }
+    textarea { resize: vertical; min-height: 72px; }
+
+    /* ── Rating sliders ──────────────────────────────────── */
+    .rating-group { margin-bottom: .85rem; }
+    .rating-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .4rem; }
+    .rating-label { font-size: .88rem; font-weight: 600; display: flex; align-items: center; gap: .32rem; }
+    .rating-value { font-size: 1rem; font-weight: 700; color: var(--accent); min-width: 3.4rem; text-align: right; display: flex; align-items: center; gap: .22rem; justify-content: flex-end; }
+    input[type="range"] {
+      -webkit-appearance: none; width: 100%; height: 6px;
+      background: var(--bg-card-2); border: none; border-radius: 3px;
+      padding: 0; cursor: pointer; touch-action: manipulation;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 26px; height: 26px;  /* large for thumb use */
+      border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 10px rgba(245,166,35,.4);
+      border: 2px solid var(--bg); cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--accent); border: 2px solid var(--bg);
+    }
+
+    /* ── Score preview ───────────────────────────────────── */
+    .score-preview {
+      background: var(--bg-card-2); border: 1px solid var(--border-hi);
+      border-radius: 10px; padding: .85rem; margin-bottom: 1rem; text-align: center;
+    }
+    .score-preview .total { font-size: 2.3rem; font-weight: 700; color: var(--accent); line-height: 1; }
+    .score-preview .total-label { font-size: .7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-top: .18rem; }
+
+    /* ── Buttons ─────────────────────────────────────────── */
+    .btn {
+      background: var(--accent); color: #0a0603; border: none;
+      border-radius: 10px; padding: .75rem 1.4rem;
+      font-family: 'Inter', sans-serif; font-size: 1rem; font-weight: 700;
+      cursor: pointer; transition: background .15s; touch-action: manipulation;
+      min-height: 48px;  /* WCAG touch target */
+    }
+    .btn:active { background: var(--accent-dk); }
+    .btn-outline { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    .btn-sm { font-size: .82rem; padding: .45rem .9rem; min-height: 40px; }
+
+    /* ── Modal ───────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.82);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      z-index: 500; display: flex; align-items: flex-end; /* bottom sheet on mobile */
+      opacity: 0; pointer-events: none; transition: opacity .25s;
+    }
+    @media (min-width: 500px) { .modal-overlay { align-items: center; } }
+    .modal-overlay.open { opacity: 1; pointer-events: all; }
+    .modal {
+      background: var(--bg-card); border: 1px solid var(--border-hi);
+      border-radius: 20px 20px 0 0; padding: 1.3rem;
+      padding-bottom: calc(1.3rem + var(--sab));
+      width: 100%; max-height: 92vh; overflow-y: auto;
+      transform: translateY(100%); transition: transform .3s cubic-bezier(.32,1,.56,1);
+    }
+    @media (min-width: 500px) {
+      .modal { border-radius: 16px; max-width: 620px; transform: translateY(20px); padding-bottom: 1.3rem; }
+    }
+    .modal-overlay.open .modal { transform: translateY(0); }
+    .modal-handle {
+      width: 36px; height: 4px; background: var(--border-hi);
+      border-radius: 2px; margin: 0 auto .9rem;
+    }
+    @media (min-width: 500px) { .modal-handle { display: none; } }
+    .modal-close {
+      position: absolute; top: .85rem; right: .85rem;
+      background: none; border: none; color: var(--text-dim);
+      font-size: 1.4rem; cursor: pointer; padding: .2rem;
+    }
+
+    /* ── Toast ───────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: calc(var(--tab-h) + var(--sab) + .75rem); left: 50%;
+      transform: translateX(-50%) translateY(120px);
+      background: var(--bg-card-2); border: 1px solid var(--border-hi);
+      border-radius: 12px; padding: .65rem 1.3rem; font-size: .86rem;
+      z-index: 999; transition: transform .4s cubic-bezier(.34,1.56,.64,1);
+      max-width: min(400px, 90vw); text-align: center; pointer-events: none;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* ── Badges ──────────────────────────────────────────── */
+    .badges-grid { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
+    .badge {
+      background: var(--bg-card-2); border: 1px solid var(--border);
+      border-radius: 20px; padding: .26rem .65rem; font-size: .7rem;
+      display: flex; align-items: center; gap: .25rem;
+    }
+    .badge.earned { border-color: var(--accent); background: rgba(245,166,35,.1); color: var(--accent); }
+
+    /* ── Shame card ──────────────────────────────────────── */
+    .shame-card {
+      background: linear-gradient(135deg,#160404,#1a0808);
+      border: 1px solid rgba(231,76,60,.3); border-radius: 12px;
+      padding: .85rem 1rem; margin-bottom: .6rem; cursor: pointer;
+    }
+    .shame-card:active { border-color: rgba(231,76,60,.6); }
+
+    /* ── Quote ───────────────────────────────────────────── */
+    .quote-card {
+      background: var(--bg-card); border-left: 3px solid var(--accent);
+      border-radius: 0 8px 8px 0; padding: .6rem .85rem;
+      margin-bottom: 1.1rem; font-style: italic;
+      color: var(--text-dim); font-size: .81rem;
+    }
+
+    /* ── Profile ─────────────────────────────────────────── */
+    .profile-avatar {
+      font-size: 3rem; width: 4.5rem; height: 4.5rem;
+      background: var(--bg-card-2); border: 2px solid var(--border-hi);
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-header { display: flex; align-items: center; gap: .9rem; margin-bottom: 1.2rem; }
+    .profile-title { font-size: .7rem; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); font-weight: 700; }
+    .profile-name { font-family: 'Playfair Display', serif; font-size: 1.6rem; font-weight: 700; }
+
+    /* ── User selector ───────────────────────────────────── */
+    .user-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(100px,1fr)); gap: .6rem; margin: .85rem 0; }
+    .user-option {
+      background: var(--bg-card-2); border: 2px solid var(--border);
+      border-radius: 12px; padding: .8rem .55rem; text-align: center; cursor: pointer;
+    }
+    .user-option:active, .user-option.selected { border-color: var(--accent); background: rgba(245,166,35,.1); }
+    .user-option .emoji { font-size: 1.8rem; margin-bottom: .3rem; }
+    .user-option .uname { font-size: .8rem; font-weight: 600; }
+
+    /* ── Rater list ──────────────────────────────────────── */
+    .rater-list { margin-top: .85rem; }
+    .rater-row { display: flex; align-items: flex-start; gap: .65rem; padding: .5rem 0; border-bottom: 1px solid var(--border); }
+    .rater-row:last-child { border-bottom: none; }
+    .rater-avatar { font-size: 1.2rem; margin-top: .1rem; }
+    .rater-name { font-weight: 600; font-size: .86rem; flex: 1; }
+    .rater-score { font-weight: 700; color: var(--accent); flex-shrink: 0; }
+    .rater-scores-mini { display: flex; gap: .22rem; flex-wrap: wrap; margin-top: .22rem; }
+    .mini-score { background: var(--bg-card-2); border-radius: 4px; padding: .1rem .35rem; font-size: .66rem; color: var(--text-dim); }
+
+    /* ── Commentary ──────────────────────────────────────── */
+    .commentary {
+      background: var(--bg-card-2); border-radius: 8px; padding: .65rem .85rem;
+      font-size: .78rem; color: var(--text-dim); font-style: italic; margin-top: .7rem;
+    }
+
+    /* ── Misc ────────────────────────────────────────────── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; align-items: start; }
+    @media (max-width: 440px) { .two-col { grid-template-columns: 1fr; } }
+    .chart-container { position: relative; width: 100%; max-width: 240px; margin: 0 auto; }
+    .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-dim); }
+    .empty-state .icon { font-size: 2.6rem; margin-bottom: .6rem; }
+    .empty-state h3 { font-size: 1rem; color: var(--text); margin-bottom: .4rem; }
+
+    /* ── Animations ──────────────────────────────────────── */
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    .animate-in { animation: fadeIn .3s ease both; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">Curry<span>Bot</span> 🍛</div>
+  <div class="user-pill" onclick="showUserSelector()">
+    <span id="current-user-emoji">👤</span>
+    <span id="current-user-name">Who are you?</span>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- ── LEADERBOARD ──────────────────────────────────── -->
+  <div id="view-leaderboard" class="view active">
+    <div id="install-banner"></div>
+    <div id="install-prompt"></div>
+    <div id="quote-card" class="quote-card"></div>
+    <div id="hero-section"></div>
+    <div id="stats-strip" class="stats-strip"></div>
+    <div class="leaderboard-header">
+      <h2 class="section-title">🌶️ The Rankings</h2>
+      <span id="last-updated" style="font-size:.7rem;color:var(--text-muted)"></span>
+    </div>
+    <div id="leaderboard-list"></div>
+  </div>
+
+  <!-- ── RATE ─────────────────────────────────────────── -->
+  <div id="view-rate" class="view">
+    <div class="form-card">
+      <h2 class="form-title">⭐ Rate a Curry House</h2>
+      <div class="form-group">
+        <label>Restaurant</label>
+        <select id="rate-restaurant"><option value="">Select a restaurant…</option></select>
+      </div>
+      <div class="form-group">
+        <label>Your Name</label>
+        <select id="rate-user"><option value="">Select your name…</option></select>
+      </div>
+      <div class="form-group">
+        <label>Date of Visit</label>
+        <input type="date" id="rate-date">
+      </div>
+      <hr class="divider">
+      <div id="rating-sliders"></div>
+      <div class="score-preview">
+        <div class="total" id="preview-score">5.0</div>
+        <div class="total-label">Overall Score</div>
+        <div id="preview-spice" style="margin-top:.28rem;font-size:.95rem">🌶️🌶️ Medium</div>
+      </div>
+      <div class="form-group">
+        <label>Notes (optional)</label>
+        <textarea id="rate-notes" placeholder="Any memorable moments? Did someone order something deeply regrettable?"></textarea>
+      </div>
+      <button class="btn" onclick="submitRating()" style="width:100%">Submit Rating 🍛</button>
+    </div>
+  </div>
+
+  <!-- ── ADD ──────────────────────────────────────────── -->
+  <div id="view-add" class="view">
+    <div class="form-card">
+      <h2 class="form-title">➕ Add a Curry House</h2>
+      <div class="form-group">
+        <label>Restaurant Name</label>
+        <input type="text" id="add-name" placeholder="e.g. Bombay Nights, The Maharaja…">
+      </div>
+      <div class="form-group">
+        <label>Location (optional)</label>
+        <input type="text" id="add-location" placeholder="e.g. Manchester city centre">
+      </div>
+      <div class="form-group">
+        <label>Added by</label>
+        <select id="add-by"><option value="">Select your name…</option></select>
+      </div>
+      <button class="btn" onclick="addRestaurant()" style="width:100%">Add Restaurant 🏠</button>
+    </div>
+  </div>
+
+  <!-- ── HALL OF SHAME ────────────────────────────────── -->
+  <div id="view-shame" class="view">
+    <div class="quote-card" style="border-left-color:var(--red)">
+      "Not all curries are created equal. Some are created… criminally." — CurryBot, probably
+    </div>
+    <h2 class="section-title" style="margin-bottom:.7rem">💩 Hall of Shame</h2>
+    <p style="color:var(--text-dim);font-size:.81rem;margin-bottom:1rem">Remembered so we never return.</p>
+    <div id="shame-list"></div>
+  </div>
+
+  <!-- ── PROFILE ───────────────────────────────────────── -->
+  <div id="view-profile" class="view">
+    <div id="profile-content"></div>
+  </div>
+
+</main>
+
+<!-- ── Bottom tab bar ──────────────────────────────────── -->
+<nav class="tab-bar">
+  <button class="tab-btn active" onclick="navigate('leaderboard')" data-view="leaderboard">
+    <span class="tab-icon">🏆</span><span class="tab-label">Board</span>
+  </button>
+  <button class="tab-btn" onclick="navigate('rate')" data-view="rate">
+    <span class="tab-icon">⭐</span><span class="tab-label">Rate</span>
+  </button>
+  <button class="tab-btn" onclick="navigate('add')" data-view="add">
+    <span class="tab-icon">➕</span><span class="tab-label">Add</span>
+  </button>
+  <button class="tab-btn" onclick="navigate('shame')" data-view="shame">
+    <span class="tab-icon">💩</span><span class="tab-label">Shame</span>
+  </button>
+  <button class="tab-btn" onclick="navigate('profile')" data-view="profile">
+    <span class="tab-icon">👤</span><span class="tab-label">Me</span>
+  </button>
+</nav>
+
+<!-- ── Restaurant detail (bottom sheet) ───────────────── -->
+<div class="modal-overlay" id="detail-modal" onclick="closeModalOverlay(event,'detail-modal',closeDetailModal)">
+  <div class="modal" style="position:relative">
+    <div class="modal-handle"></div>
+    <button class="modal-close" onclick="closeDetailModal()">✕</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<!-- ── User selector (bottom sheet) ───────────────────── -->
+<div class="modal-overlay" id="user-modal" onclick="closeModalOverlay(event,'user-modal',closeUserModal)">
+  <div class="modal" style="position:relative;max-width:520px">
+    <div class="modal-handle"></div>
+    <button class="modal-close" onclick="closeUserModal()">✕</button>
+    <h2 class="form-title">Who are you? 🤔</h2>
+    <div id="existing-users-grid" class="user-grid"></div>
+    <hr class="divider">
+    <p style="font-size:.81rem;color:var(--text-dim);margin-bottom:.6rem">Or join the crew:</p>
+    <div style="display:flex;gap:.6rem;align-items:center">
+      <input type="text" id="new-user-name" placeholder="Your name…" style="flex:1"
+             onkeydown="if(event.key==='Enter')createAndSelectUser()">
+      <select id="new-user-emoji" style="width:auto;min-width:56px;font-size:1.1rem;padding:.58rem">
+        <option>🍛</option><option>🌶️</option><option>🧅</option><option>🥘</option>
+        <option>🧄</option><option>🫚</option><option>🧆</option><option>🥙</option>
+        <option>👑</option><option>🤴</option><option>💀</option><option>🔥</option>
+        <option>😈</option><option>🧙</option><option>🤠</option><option>🥷</option>
+      </select>
+      <button class="btn btn-sm" onclick="createAndSelectUser()">Join</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+const state = { user: null, restaurants: [], users: [], stats: null, view: 'leaderboard' };
+
+// ═══════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════
+const QUOTES = [
+  "Life is too short for bad curry. And yet, somehow, we persevere.",
+  "A good vindaloo is like a good friend — it stays with you long after you've left.",
+  "The poppadom is merely a rehearsal for the greatness to come.",
+  "Naan is just bread that made better life choices.",
+  "Biryani: proof that rice can have ambition.",
+  "The mango chutney was invented by someone who wanted every other condiment to feel inadequate.",
+  "Ordering a korma is a personality trait. We don't make the rules.",
+  "The best table in any curry house is the one you booked for six but ten people showed up.",
+  "Rice or naan? Answer carefully. Friendships have ended over less.",
+  "A bad poppadom is the original broken promise.",
+  "The raita is not a condiment. The raita is therapy.",
+];
+
+const METRICS = {
+  poppadoms: { label:'Poppadoms', emoji:'🥐', bar:'bar-poppadoms' },
+  main:      { label:'Main',      emoji:'🍛', bar:'bar-main'      },
+  price:     { label:'Price',     emoji:'💰', bar:'bar-price'     },
+  vibe:      { label:'Vibe',      emoji:'✨', bar:'bar-vibe'      },
+  service:   { label:'Service',   emoji:'🤵', bar:'bar-service'   },
+};
+
+const SCORE_EMOJIS = ['😭','😭','😕','😕','😐','😐','😋','😋','🤩','🤩','🤩'];
+
+const ACHIEVEMENTS = [
+  { id:'first_bite',    emoji:'🍽️', name:'First Bite',            desc:'Submit your first rating' },
+  { id:'curry_crawler', emoji:'🦀', name:'Curry Crawler',          desc:'Rate 3 restaurants' },
+  { id:'spice_pilgrim', emoji:'🛕', name:'Spice Pilgrim',          desc:'Rate 5 restaurants' },
+  { id:'naan_stop',     emoji:'🫓', name:'Naan-Stop Eater',        desc:'Rate 10 restaurants' },
+  { id:'generous',      emoji:'🌟', name:'Generous Soul',          desc:'Average rating above 8.0' },
+  { id:'critic',        emoji:'😤', name:'Harsh Critic',           desc:'Average rating below 4.0' },
+  { id:'poppadom_10',   emoji:'👌', name:'Poppadom Perfectionist', desc:'Give 10/10 for poppadoms' },
+  { id:'all_tens',      emoji:'💯', name:'Everything is Perfect',  desc:'Give 10/10 for everything' },
+];
+
+const COMMENTARY = {
+  poppadoms: {
+    low:  "These poppadoms stood accused of crimes against crunchiness. The verdict: guilty.",
+    mid:  "The poppadoms performed their poppadom duties. Nothing more.",
+    high: "Seriously good poppadoms. The table fell into respectful silence.",
+    peak: "Transcendent. Someone nearly cried. Into the mango chutney.",
+  },
+  main: {
+    low:  "The main course tasted like it was made by someone who once googled 'what is curry'.",
+    mid:  "A main that existed. It had spices. Some may have been intentional.",
+    high: "A proper main. Went back for seconds. No shame.",
+    peak: "Genuinely transcendent. You rang your mum to tell her. She didn't care. You needed to share.",
+  },
+  price: {
+    low:  "Robbery. With naan bread. The absolute cheek.",
+    mid:  "You paid. You're not fully sure why.",
+    high: "Excellent value. Left feeling smug and pleasantly full.",
+    peak: "A bargain so obscene you tipped out of guilt.",
+  },
+  vibe: {
+    low:  "The atmosphere: a waiting room, but spicier and with less hope.",
+    mid:  "Passable vibes. The music was either too loud or entirely made up.",
+    high: "Genuinely pleasant. You stayed longer than intended, which is the highest compliment.",
+    peak: "Immaculate vibes. Everyone looked cooler than usual. Even Gary.",
+  },
+  service: {
+    low:  "Staff energy: someone on their fourth consecutive 12-hour shift.",
+    mid:  "Service was technically present. Legally, that counts.",
+    high: "Attentive without being hovery. The Goldilocks of service.",
+    peak: "Service so good you're considering coming back just to thank them.",
+  },
+};
+
+function commentary(metric, score) {
+  const c = COMMENTARY[metric];
+  if (score < 4) return c.low; if (score < 7) return c.mid; if (score < 9.5) return c.high; return c.peak;
+}
+function spiceLevel(score) {
+  if (score===null||score===undefined) return { label:'Unrated',            chilies:'❓', color:'var(--text-muted)' };
+  if (score < 3)   return { label:'Yoghurt Level',        chilies:'💧',               color:'#3498db' };
+  if (score < 5)   return { label:'Pilau Rice Level',     chilies:'🌶️',              color:'#f39c12' };
+  if (score < 6.5) return { label:'Medium',               chilies:'🌶️🌶️',           color:'#e67e22' };
+  if (score < 7.5) return { label:'Madras Hot',           chilies:'🌶️🌶️🌶️',        color:'#e74c3c' };
+  if (score < 8.5) return { label:'Vindaloo Vibes',       chilies:'🌶️🌶️🌶️🌶️',     color:'#c0392b' };
+  return             { label:'PHAAL CERTIFIED 🔥',        chilies:'🌶️🌶️🌶️🌶️🌶️',  color:'#8e0000' };
+}
+function rankBadge(rank) {
+  if (rank===1) return {emoji:'🥇',cls:'gold'}; if (rank===2) return {emoji:'🥈',cls:'silver'};
+  if (rank===3) return {emoji:'🥉',cls:'bronze'}; return {emoji:null,cls:'normal'};
+}
+function userTitle(n) {
+  if (n===0) return 'Curry Novice'; if (n<3) return 'Spice Seeker'; if (n<5) return 'Masala Maven';
+  if (n<8)  return 'Biryani Baron'; if (n<12) return 'Curry Connoisseur'; return '👑 The Maharaja';
+}
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+function fmt(n)   { return (n===null||n===undefined) ? '—' : Number(n).toFixed(1); }
+function esc(s)   { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ═══════════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════════
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const res  = await fetch('/api' + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+async function loadAll() {
+  const [restaurants, users, stats] = await Promise.all([
+    api('GET','/restaurants'), api('GET','/users'), api('GET','/stats'),
+  ]);
+  state.restaurants = restaurants; state.users = users; state.stats = stats;
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════
+function navigate(view) {
+  state.view = view;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  document.querySelector(`[data-view="${view}"]`).classList.add('active');
+  window.scrollTo(0, 0);
+  renderView(view);
+}
+function renderView(v) {
+  ({leaderboard:renderLeaderboard, rate:renderRateForm, add:renderAddForm, shame:renderShame, profile:renderProfile}[v]||(() => {}))();
+}
+
+// ═══════════════════════════════════════════════════════════
+// INSTALL BANNERS
+// ═══════════════════════════════════════════════════════════
+let deferredInstall = null;
+
+function showInstallBanners() {
+  // Android / Chrome: intercept beforeinstallprompt
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredInstall = e;
+    const el = document.getElementById('install-prompt');
+    el.innerHTML = `
+      <div class="install-prompt">
+        <span style="font-size:2rem">📲</span>
+        <div class="text">
+          <strong>Install CurryBot</strong>
+          Add to your home screen for the full app experience.
+        </div>
+        <button class="btn btn-sm" onclick="doInstall()">Install</button>
+      </div>`;
+  });
+
+  // iOS: show manual instructions if not already installed
+  const isIos     = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const inStandalone = window.navigator.standalone;
+  const dismissed = localStorage.getItem('ios-banner-dismissed');
+  if (isIos && !inStandalone && !dismissed) {
+    document.getElementById('install-banner').innerHTML = `
+      <div class="install-banner">
+        <span class="icon">📱</span>
+        <div>
+          <strong>Add CurryBot to your Home Screen</strong>
+          Tap the Share button <strong>⎙</strong> then "Add to Home Screen" for the full app experience.
+        </div>
+        <button class="install-banner-close" onclick="dismissIosBanner()">✕</button>
+      </div>`;
+  }
+}
+
+function doInstall() {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  deferredInstall.userChoice.then(() => {
+    deferredInstall = null;
+    document.getElementById('install-prompt').innerHTML = '';
+  });
+}
+
+function dismissIosBanner() {
+  localStorage.setItem('ios-banner-dismissed', '1');
+  document.getElementById('install-banner').innerHTML = '';
+}
+
+// ═══════════════════════════════════════════════════════════
+// LEADERBOARD
+// ═══════════════════════════════════════════════════════════
+function renderLeaderboard() {
+  document.getElementById('quote-card').textContent = `"${QUOTES[Math.floor(Math.random()*QUOTES.length)]}"`;
+  renderStats();
+
+  const rated  = state.restaurants.filter(r => r.overallScore !== null);
+  const heroEl = document.getElementById('hero-section');
+
+  if (rated.length > 0) {
+    const top = rated[0], spice = spiceLevel(top.overallScore);
+    heroEl.innerHTML = `
+      <div class="hero-card animate-in">
+        <div class="hero-label">🥇 Golden Naan Award — Current Champion</div>
+        <div class="hero-meta">
+          <div>
+            <div class="hero-name">${esc(top.name)}</div>
+            ${top.location ? `<div style="color:var(--text-dim);font-size:.81rem">📍 ${esc(top.location)}</div>` : ''}
+            <div class="hero-metrics">
+              ${top.avgScores ? Object.entries(METRICS).map(([k,m]) =>
+                `<div class="metric-chip">${m.emoji} ${m.label}: <strong>${fmt(top.avgScores[k])}</strong></div>`
+              ).join('') : ''}
+            </div>
+            <div style="margin-top:.65rem;font-size:.81rem;display:flex;align-items:center;gap:.38rem">
+              <span>${spice.chilies}</span>
+              <span style="color:var(--text-dim)">${spice.label}</span>
+              <span style="color:var(--text-muted);margin-left:.3rem">${top.ratingCount} rating${top.ratingCount!==1?'s':''}</span>
+            </div>
+          </div>
+          <div><div class="hero-score">${fmt(top.overallScore)}<span>/10</span></div></div>
+        </div>
+      </div>`;
+  } else heroEl.innerHTML = '';
+
+  const list = document.getElementById('leaderboard-list');
+  if (!state.restaurants.length) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">🍛</div><h3>No restaurants yet</h3><p>Tap ➕ to add your first curry house.</p></div>`;
+    return;
+  }
+
+  list.innerHTML = state.restaurants.map((r, i) => {
+    const rank = i+1, badge = rankBadge(rank), spice = spiceLevel(r.overallScore);
+    const top3 = rank <= 3 && r.overallScore !== null;
+    return `
+      <div class="restaurant-card ${top3?'rank-'+rank:''} animate-in" style="animation-delay:${i*.04}s" onclick="showDetail(${r.id})">
+        <div class="card-top">
+          ${badge.emoji ? `<div class="rank-badge">${badge.emoji}</div>` : `<div class="rank-num">#${rank}</div>`}
+          <div class="card-info">
+            <div class="restaurant-name">${esc(r.name)}</div>
+            <div class="restaurant-meta">
+              ${r.location ? `<span>📍 ${esc(r.location)}</span>` : ''}
+              <span>${r.ratingCount} review${r.ratingCount!==1?'s':''}</span>
+              ${r.ratingCount>0?`<span>${spice.chilies} ${spice.label}</span>`:''}
+            </div>
+          </div>
+          <div class="score-display">
+            <div class="score-big ${r.overallScore!==null?badge.cls:'unrated'}">${r.overallScore!==null?fmt(r.overallScore):'TBC'}</div>
+            <div class="score-label">${r.overallScore!==null?'out of 10':'no ratings'}</div>
+          </div>
+        </div>
+        ${r.avgScores ? `
+          <div class="metric-bars">
+            ${Object.entries(METRICS).map(([k,m]) => `
+              <div>
+                <div class="metric-bar-label">${m.label}</div>
+                <div class="metric-bar-track">
+                  <div class="metric-bar-fill ${m.bar}" style="width:${(r.avgScores[k]/10)*100}%"></div>
+                </div>
+              </div>`).join('')}
+          </div>` : ''}
+      </div>`;
+  }).join('');
+
+  document.getElementById('last-updated').textContent = 'Updated just now';
+}
+
+function renderStats() {
+  const s = state.stats; if (!s) return;
+  document.getElementById('stats-strip').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${s.totalRestaurants}</div><div class="stat-label">🏠 Restaurants</div></div>
+    <div class="stat-card"><div class="stat-value">${s.totalRatings}</div><div class="stat-label">⭐ Reviews</div></div>
+    <div class="stat-card"><div class="stat-value">${s.totalUsers}</div><div class="stat-label">👥 Crew</div></div>
+    ${s.topRater?`<div class="stat-card"><div class="stat-value" style="font-size:1.05rem">${esc(s.topRater.name.split(' ')[0])}</div><div class="stat-label">🏆 Top Rater (${s.topRater.count})</div></div>`:''}
+    ${s.mostControversial?`<div class="stat-card"><div class="stat-value" style="font-size:1rem">${esc(s.mostControversial.name.split(' ')[0])}</div><div class="stat-label">🎭 Most Debated</div></div>`:''}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// DETAIL MODAL
+// ═══════════════════════════════════════════════════════════
+let radarChart = null;
+
+function showDetail(id) {
+  const r = state.restaurants.find(r => r.id === id); if (!r) return;
+  const spice = spiceLevel(r.overallScore);
+
+  const ratingsHtml = r.ratings && r.ratings.length ? `
+    <div class="rater-list">
+      ${r.ratings.map(rt => {
+        const ov = (rt.poppadoms+rt.main+rt.price+rt.vibe+rt.service)/5;
+        const u  = state.users.find(u => u.name === rt.userName);
+        return `
+          <div class="rater-row">
+            <div class="rater-avatar">${u?u.emoji:'🍛'}</div>
+            <div style="flex:1;min-width:0">
+              <div class="rater-name">${esc(rt.userName)}</div>
+              <div class="rater-scores-mini">${Object.entries(METRICS).map(([k,m])=>`<div class="mini-score">${m.emoji}${rt[k]}</div>`).join('')}</div>
+              ${rt.notes?`<div style="font-size:.7rem;color:var(--text-muted);margin-top:.22rem;font-style:italic">"${esc(rt.notes)}"</div>`:''}
+            </div>
+            <div class="rater-score">${fmt(ov)}</div>
+          </div>`;
+      }).join('')}
+    </div>` :
+    `<div style="color:var(--text-dim);font-size:.81rem;margin-top:.6rem">No ratings yet — be the first!</div>`;
+
+  const commentaryHtml = r.avgScores ? `
+    <div class="commentary">${Object.entries(METRICS).map(([k,m])=>
+      `<p style="margin-bottom:.32rem"><strong style="color:var(--accent)">${m.emoji} ${m.label}:</strong> ${commentary(k,r.avgScores[k])}</p>`
+    ).join('')}</div>` : '';
+
+  document.getElementById('modal-content').innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:.9rem;margin-bottom:1rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px">Curry House</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.5rem;font-weight:700;line-height:1.1">${esc(r.name)}</div>
+        ${r.location?`<div style="color:var(--text-dim);font-size:.81rem;margin-top:.18rem">📍 ${esc(r.location)}</div>`:''}
+      </div>
+      ${r.overallScore!==null?`
+        <div style="text-align:center;flex-shrink:0">
+          <div style="font-size:2.6rem;font-weight:700;color:var(--gold);line-height:1">${fmt(r.overallScore)}</div>
+          <div style="font-size:.66rem;color:var(--text-muted)">/10 overall</div>
+          <div style="font-size:.85rem;margin-top:.22rem">${spice.chilies} ${spice.label}</div>
+        </div>`:''}
+    </div>
+
+    ${r.avgScores?`
+      <div class="two-col">
+        <div>
+          <div style="font-size:.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:.6rem">Breakdown</div>
+          ${Object.entries(METRICS).map(([k,m])=>`
+            <div style="margin-bottom:.5rem">
+              <div style="display:flex;justify-content:space-between;margin-bottom:.25rem">
+                <span style="font-size:.82rem">${m.emoji} ${m.label}</span>
+                <strong style="color:var(--accent)">${fmt(r.avgScores[k])}</strong>
+              </div>
+              <div class="metric-bar-track">
+                <div class="metric-bar-fill ${m.bar}" style="width:${(r.avgScores[k]/10)*100}%;height:6px"></div>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="chart-container"><canvas id="radar-chart" width="220" height="220"></canvas></div>
+      </div>`:''}
+
+    <hr class="divider">
+    <div style="font-size:.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:.42rem">
+      Crew Reviews (${r.ratingCount})
+    </div>
+    ${ratingsHtml}
+    ${commentaryHtml}
+    <div style="margin-top:.9rem">
+      <button class="btn" onclick="closeDetailModal();navigate('rate')" style="width:100%">Rate This Restaurant ⭐</button>
+    </div>`;
+
+  document.getElementById('detail-modal').classList.add('open');
+
+  if (r.avgScores) {
+    setTimeout(() => {
+      const ctx = document.getElementById('radar-chart'); if (!ctx) return;
+      if (radarChart) { radarChart.destroy(); radarChart = null; }
+      radarChart = new Chart(ctx, {
+        type: 'radar',
+        data: {
+          labels: ['🥐 Poppadoms','🍛 Main','💰 Price','✨ Vibe','🤵 Service'],
+          datasets: [{
+            data: [r.avgScores.poppadoms,r.avgScores.main,r.avgScores.price,r.avgScores.vibe,r.avgScores.service],
+            backgroundColor:'rgba(245,166,35,.15)', borderColor:'rgba(245,166,35,.8)',
+            pointBackgroundColor:'#f5a623', pointBorderColor:'#0a0603', borderWidth:2,
+          }],
+        },
+        options: {
+          responsive:true,
+          scales:{ r:{ min:0, max:10, ticks:{display:false}, grid:{color:'rgba(255,255,255,.07)'}, angleLines:{color:'rgba(255,255,255,.07)'}, pointLabels:{color:'#8a6040',font:{size:10}} }},
+          plugins:{ legend:{display:false} },
+        },
+      });
+    }, 80);
+  }
+}
+
+function closeDetailModal() {
+  document.getElementById('detail-modal').classList.remove('open');
+  if (radarChart) { radarChart.destroy(); radarChart = null; }
+}
+function closeModalOverlay(e, id, fn) { if (e.target === document.getElementById(id)) fn(); }
+
+// ═══════════════════════════════════════════════════════════
+// RATE FORM
+// ═══════════════════════════════════════════════════════════
+function renderRateForm() {
+  document.getElementById('rate-restaurant').innerHTML =
+    '<option value="">Select a restaurant…</option>' +
+    state.restaurants.map(r=>`<option value="${r.id}">${esc(r.name)}${r.location?' — '+esc(r.location):''}</option>`).join('');
+
+  const usel = document.getElementById('rate-user');
+  usel.innerHTML = '<option value="">Select your name…</option>' +
+    state.users.map(u=>`<option value="${esc(u.name)}">${u.emoji} ${esc(u.name)}</option>`).join('');
+  if (state.user) usel.value = state.user.name;
+  document.getElementById('rate-date').value = new Date().toISOString().split('T')[0];
+
+  document.getElementById('rating-sliders').innerHTML = Object.entries(METRICS).map(([key,m]) => `
+    <div class="rating-group">
+      <div class="rating-header">
+        <div class="rating-label">${m.emoji} ${m.label}</div>
+        <div class="rating-value">
+          <span id="emoji-${key}">😐</span>
+          <span id="val-${key}">5</span><span style="color:var(--text-muted)">/10</span>
+        </div>
+      </div>
+      <input type="range" min="0" max="10" step="0.5" value="5" id="slider-${key}"
+             oninput="updateSlider('${key}',this.value)">
+    </div>`).join('');
+
+  updateScorePreview();
+}
+
+function updateSlider(key, value) {
+  document.getElementById('val-'+key).textContent = value;
+  document.getElementById('emoji-'+key).textContent = SCORE_EMOJIS[Math.round(Number(value))];
+  updateScorePreview();
+}
+
+function updateScorePreview() {
+  const scores = Object.keys(METRICS).map(k => { const el = document.getElementById('slider-'+k); return el ? parseFloat(el.value) : 5; });
+  const overall = avg(scores), spice = spiceLevel(overall);
+  const el = document.getElementById('preview-score');
+  el.textContent = fmt(overall); el.style.color = spice.color;
+  document.getElementById('preview-spice').textContent = `${spice.chilies} ${spice.label}`;
+}
+
+async function submitRating() {
+  const restaurantId = parseInt(document.getElementById('rate-restaurant').value);
+  const userName     = document.getElementById('rate-user').value;
+  const visitDate    = document.getElementById('rate-date').value;
+  const notes        = document.getElementById('rate-notes').value;
+  if (!restaurantId) return showToast('⚠️ Please select a restaurant');
+  if (!userName)     return showToast('⚠️ Please select your name');
+
+  const scores = {};
+  for (const key of Object.keys(METRICS)) scores[key] = parseFloat(document.getElementById('slider-'+key).value);
+
+  try {
+    await api('POST','/ratings',{restaurantId,userName,...scores,notes,visitDate});
+    await loadAll();
+    const ov = avg(Object.values(scores));
+    let msg = '🎉 Rating submitted! ';
+    if (ov>=8.5) msg+="What a place. You're basically a curry critic now.";
+    else if (ov>=6.5) msg+="Solid marks. The naan gods are pleased.";
+    else if (ov>=5) msg+="Could be worse. Could be better. Such is curry.";
+    else msg+="Our deepest condolences. That's why we log these things.";
+    showToast(msg);
+    navigate('leaderboard');
+  } catch(e) { showToast('❌ '+e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ADD RESTAURANT
+// ═══════════════════════════════════════════════════════════
+function renderAddForm() {
+  const sel = document.getElementById('add-by');
+  sel.innerHTML = '<option value="">Select your name…</option>' +
+    state.users.map(u=>`<option value="${esc(u.name)}">${u.emoji} ${esc(u.name)}</option>`).join('');
+  if (state.user) sel.value = state.user.name;
+}
+
+async function addRestaurant() {
+  const name = document.getElementById('add-name').value.trim();
+  const location = document.getElementById('add-location').value.trim();
+  const addedBy  = document.getElementById('add-by').value;
+  if (!name) return showToast('⚠️ Restaurant needs a name');
+  try {
+    await api('POST','/restaurants',{name,location,addedBy});
+    await loadAll();
+    document.getElementById('add-name').value = '';
+    document.getElementById('add-location').value = '';
+    showToast(`✅ ${esc(name)} added! Time to eat. 🍛`);
+    navigate('leaderboard');
+  } catch(e) { showToast('❌ '+e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// HALL OF SHAME
+// ═══════════════════════════════════════════════════════════
+function renderShame() {
+  const shame  = [...state.restaurants.filter(r=>r.overallScore!==null)].sort((a,b)=>a.overallScore-b.overallScore).slice(0,5);
+  const labels = ['💩 The Worst','😬 Deeply Disappointing','😑 Just… No','🙁 Below Par','😕 Could Try Harder'];
+  const el     = document.getElementById('shame-list');
+  if (!shame.length) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">🎉</div><h3>No shame yet!</h3><p>Either you only visit good places, or you haven't rated anything yet.</p></div>`;
+    return;
+  }
+  el.innerHTML = shame.map((r,i)=>`
+    <div class="shame-card" onclick="showDetail(${r.id})">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:.66rem;color:var(--red);text-transform:uppercase;letter-spacing:1px;margin-bottom:.25rem">${labels[i]||'😶 Also Bad'}</div>
+          <div style="font-weight:600;font-size:.98rem">${esc(r.name)}</div>
+          ${r.location?`<div style="color:var(--text-dim);font-size:.76rem">📍 ${esc(r.location)}</div>`:''}
+          <div style="color:var(--text-muted);font-size:.7rem;margin-top:.25rem">${r.ratingCount} review${r.ratingCount!==1?'s':''}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:1.8rem;font-weight:700;color:var(--red)">${fmt(r.overallScore)}</div>
+          <div style="font-size:.66rem;color:var(--text-muted)">/10</div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROFILE
+// ═══════════════════════════════════════════════════════════
+function renderProfile() {
+  const el = document.getElementById('profile-content');
+  if (!state.user) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">👤</div><h3>Who are you?</h3><p style="margin-bottom:1rem">Pick your profile to see your stats and achievements.</p><button class="btn" onclick="showUserSelector()">Choose Your Name</button></div>`;
+    return;
+  }
+  const u = state.user;
+  const myRatings = state.restaurants.flatMap(r =>
+    (r.ratings||[]).filter(rt=>rt.userName===u.name).map(rt=>({...rt,restaurantName:r.name}))
+  );
+  const count    = myRatings.length;
+  const avgTotal = count>0 ? avg(myRatings.map(rt=>(rt.poppadoms+rt.main+rt.price+rt.vibe+rt.service)/5)) : null;
+  const earned   = earnedBadges(myRatings);
+
+  el.innerHTML = `
+    <div class="profile-header">
+      <div class="profile-avatar">${u.emoji}</div>
+      <div>
+        <div class="profile-title">${userTitle(count)}</div>
+        <div class="profile-name">${esc(u.name)}</div>
+        <div style="color:var(--text-dim);font-size:.81rem;margin-top:.22rem">
+          ${count} restaurant${count!==1?'s':''} reviewed${avgTotal!==null?' · avg score '+fmt(avgTotal):''}
+        </div>
+      </div>
+    </div>
+    <div class="stats-strip" style="margin-bottom:1.1rem">
+      <div class="stat-card"><div class="stat-value">${count}</div><div class="stat-label">Reviews</div></div>
+      ${avgTotal!==null?`<div class="stat-card"><div class="stat-value">${fmt(avgTotal)}</div><div class="stat-label">Avg Given</div></div>`:''}
+      <div class="stat-card"><div class="stat-value">${earned.length}</div><div class="stat-label">Badges</div></div>
+    </div>
+    <h3 style="font-size:.85rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:.6rem">🏅 Achievements</h3>
+    <div class="badges-grid">${ACHIEVEMENTS.map(a=>`<div class="badge ${earned.includes(a.id)?'earned':''}" title="${a.desc}">${a.emoji} ${a.name}</div>`).join('')}</div>
+    ${count>0?`
+      <h3 style="font-size:.85rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:1.3rem;margin-bottom:.6rem">📜 Your Reviews</h3>
+      ${myRatings.map(rt=>{
+        const ov=( rt.poppadoms+rt.main+rt.price+rt.vibe+rt.service)/5, spice=spiceLevel(ov);
+        return `
+          <div class="restaurant-card" style="cursor:default">
+            <div class="card-top">
+              <div class="card-info">
+                <div class="restaurant-name">${esc(rt.restaurantName)}</div>
+                <div class="restaurant-meta">
+                  ${rt.visitDate?`<span>📅 ${rt.visitDate}</span>`:''}
+                  <span>${spice.chilies} ${spice.label}</span>
+                </div>
+                ${rt.notes?`<div style="font-size:.76rem;color:var(--text-muted);margin-top:.25rem;font-style:italic">"${esc(rt.notes)}"</div>`:''}
+              </div>
+              <div class="score-display"><div class="score-big normal">${fmt(ov)}</div><div class="score-label">your score</div></div>
+            </div>
+            <div class="metric-bars">
+              ${Object.entries(METRICS).map(([k,m])=>`
+                <div>
+                  <div class="metric-bar-label">${m.label}</div>
+                  <div class="metric-bar-track"><div class="metric-bar-fill ${m.bar}" style="width:${(rt[k]/10)*100}%"></div></div>
+                </div>`).join('')}
+            </div>
+          </div>`;
+      }).join('')}`:
+      `<div class="empty-state" style="padding:1.8rem 1rem">
+        <div class="icon">⭐</div><h3>No reviews yet</h3>
+        <p style="margin-bottom:.9rem">Rate your first curry house!</p>
+        <button class="btn btn-outline" onclick="navigate('rate')">Start Rating</button>
+      </div>`}`;
+}
+
+function earnedBadges(r) {
+  const e = [];
+  if (r.length>=1)  e.push('first_bite');
+  if (r.length>=3)  e.push('curry_crawler');
+  if (r.length>=5)  e.push('spice_pilgrim');
+  if (r.length>=10) e.push('naan_stop');
+  if (r.some(rt=>rt.poppadoms===10)) e.push('poppadom_10');
+  if (r.some(rt=>rt.poppadoms===10&&rt.main===10&&rt.price===10&&rt.vibe===10&&rt.service===10)) e.push('all_tens');
+  if (r.length>0) {
+    const a = avg(r.map(rt=>(rt.poppadoms+rt.main+rt.price+rt.vibe+rt.service)/5));
+    if (a>=8) e.push('generous'); if (a<4) e.push('critic');
+  }
+  return e;
+}
+
+// ═══════════════════════════════════════════════════════════
+// USER SELECTOR
+// ═══════════════════════════════════════════════════════════
+function showUserSelector() {
+  const grid = document.getElementById('existing-users-grid');
+  grid.innerHTML = state.users.length ?
+    state.users.map(u=>`<div class="user-option ${state.user&&state.user.id===u.id?'selected':''}" onclick="selectUser(${u.id})"><div class="emoji">${u.emoji}</div><div class="uname">${esc(u.name)}</div></div>`).join('') :
+    `<p style="color:var(--text-dim);font-size:.81rem">No one here yet — be the first!</p>`;
+  document.getElementById('user-modal').classList.add('open');
+}
+
+function selectUser(id) {
+  state.user = state.users.find(u=>u.id===id);
+  if (state.user) { localStorage.setItem('currybot_user',JSON.stringify(state.user)); updateUserPill(); }
+  closeUserModal();
+  if (state.view==='profile') renderProfile();
+}
+
+async function createAndSelectUser() {
+  const name = document.getElementById('new-user-name').value.trim();
+  const emoji = document.getElementById('new-user-emoji').value;
+  if (!name) return showToast('⚠️ Enter your name');
+  try {
+    const user = await api('POST','/users',{name,emoji});
+    await loadAll();
+    state.user = user; localStorage.setItem('currybot_user',JSON.stringify(user));
+    updateUserPill(); closeUserModal();
+    showToast(`Welcome to the crew, ${esc(name)}! 🍛`);
+    if (state.view==='profile') renderProfile();
+  } catch(e) { showToast('❌ '+e.message); }
+}
+
+function closeUserModal() { document.getElementById('user-modal').classList.remove('open'); }
+function updateUserPill() {
+  if (state.user) {
+    document.getElementById('current-user-emoji').textContent = state.user.emoji;
+    document.getElementById('current-user-name').textContent  = state.user.name;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4500);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SERVICE WORKER
+// ═══════════════════════════════════════════════════════════
+function registerSW() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW:', err));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  registerSW();
+  showInstallBanners();
+
+  const saved = localStorage.getItem('currybot_user');
+  if (saved) { state.user = JSON.parse(saved); updateUserPill(); }
+
+  try {
+    await loadAll();
+    renderView(state.view);
+    setInterval(async () => { await loadAll(); if (state.view==='leaderboard') renderLeaderboard(); }, 30000);
+  } catch(e) {
+    showToast('⚠️ Could not connect to server. Is it running? (node server.js)');
+  }
+}
+
+init();
+</script>
+</body>
+</html>

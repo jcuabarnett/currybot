@@ -1,0 +1,17 @@
+{
+  "name": "CurryBot",
+  "short_name": "CurryBot",
+  "description": "Rate curry houses with your mates 🍛",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#0a0603",
+  "theme_color": "#f5a623",
+  "orientation": "portrait",
+  "categories": ["food", "lifestyle", "social"],
+  "icons": [
+    { "src": "/icons/icon.svg",     "sizes": "any",     "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png",     "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png",     "purpose": "any maskable" }
+  ]
+}
