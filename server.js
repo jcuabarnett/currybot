@@ -1,9 +1,16 @@
 const express = require('express');
+const crypto  = require('crypto');
 const fs      = require('fs');
 const path    = require('path');
 
 const app       = express();
 const DATA_FILE = path.join(__dirname, 'data.json');
+
+// Admin PIN. When set (Render env var ADMIN_PIN), admin actions need the PIN as well as
+// the admin name. When unset, the app falls back to name-only admin (the old behaviour)
+// so a deploy never locks the admin out — but anyone choosing the admin name is admin.
+const ADMIN_PIN = (process.env.ADMIN_PIN || '').trim();
+if (!ADMIN_PIN) console.warn('⚠️  ADMIN_PIN is not set: anyone who picks the admin name can act as admin.');
 
 // ── In-memory store ────────────────────────────────────────
 // Loaded once at startup; writes go to Upstash (prod) or data.json (dev).
@@ -20,7 +27,9 @@ function saveData(data) {
       method:  'POST',
       headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
       body:    JSON.stringify(['SET', 'currybot', JSON.stringify(data)]),
-    }).catch(err => console.error('Upstash write error:', err.message));
+    })
+      .then(async r => { if (!r.ok) console.error('Upstash write rejected:', r.status, await r.text()); })
+      .catch(err => console.error('Upstash write error:', err.message));
   } else {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   }
@@ -49,18 +58,68 @@ async function initStorage() {
   }
 }
 
+// Unique, increasing IDs. Date.now() alone collides when many records are created in the
+// same millisecond (bulk import).
+let lastId = 0;
+function nextId() {
+  const now = Date.now();
+  lastId = now > lastId ? now : lastId + 1;
+  return lastId;
+}
+
 function avg(arr) {
   if (!arr.length) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// Admin status is derived from name, not stored, so it can't be spoofed via a client-supplied flag.
+const norm = s => String(s || '').trim().toLowerCase();
+
+// The admin is identified by name; with ADMIN_PIN set they must also present the PIN.
 function isAdminName(name) {
-  return !!name && name.trim().toLowerCase() === 'johnny';
+  return norm(name) === 'johnny';
 }
 
-const MAX_PHOTO_LEN = 6 * 1024 * 1024; // ~6MB data-URI safety cap
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a)), bb = Buffer.from(String(b));
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
 
+function isAdminRequest(req, name) {
+  if (!isAdminName(name)) return false;
+  if (!ADMIN_PIN) return true;
+  return safeEqual(req.get('x-admin-pin') || '', ADMIN_PIN);
+}
+
+function findUser(data, name) {
+  return data.users.find(u => norm(u.name) === norm(name));
+}
+
+const METRIC_KEYS = ['poppadoms', 'main', 'price', 'vibe', 'service'];
+
+// Returns an error string, or null if all five scores are numbers from 0 to 10.
+function scoreError(src) {
+  for (const key of METRIC_KEYS) {
+    const val = src[key];
+    const n   = Number(val);
+    if (val === undefined || val === null || val === '' || !Number.isFinite(n) || n < 0 || n > 10) {
+      return `${key[0].toUpperCase() + key.slice(1)} needs a score from 0 to 10`;
+    }
+  }
+  return null;
+}
+const roundScore = v => Math.round(Number(v) * 10) / 10;
+
+const MAX_PHOTO_LEN = 6 * 1024 * 1024; // ~6MB data-URI safety cap
+// Strict check: the data URI is rendered into an <img src>, so it must be plain base64.
+const PHOTO_RE = /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/;
+function photoError(image) {
+  if (!image || typeof image !== 'string') return 'Photo must be an image';
+  if (image.length > MAX_PHOTO_LEN) return 'Photo is too large';
+  if (!PHOTO_RE.test(image)) return 'Photo must be an image';
+  return null;
+}
+
+app.set('trust proxy', 1); // Render sits behind a proxy; needed for per-IP PIN attempt limits
 app.use(express.json({ limit: '8mb' }));
 
 // Service worker must be served from root scope with correct headers
@@ -78,11 +137,37 @@ app.get('/manifest.json', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res, filePath) {
-    // Long-cache for icons and chart lib; no-cache for HTML
+    // Long-cache for icons; no-cache for HTML
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
     else if (filePath.match(/\.(png|svg|webp)$/)) res.setHeader('Cache-Control', 'public, max-age=604800');
   },
 }));
+
+// ── Config & admin ─────────────────────────────────────────
+app.get('/api/config', (req, res) => {
+  res.json({ adminPinRequired: !!ADMIN_PIN });
+});
+
+// Simple brute-force guard: 8 wrong PINs per IP locks that IP out for 15 minutes.
+const pinFailures = new Map();
+app.post('/api/admin/verify', (req, res) => {
+  const { name, pin } = req.body || {};
+  if (!isAdminName(name)) return res.status(403).json({ error: 'That profile is not an admin' });
+  if (!ADMIN_PIN) return res.json({ ok: true });
+
+  const now  = Date.now();
+  const rec  = pinFailures.get(req.ip) || { count: 0, until: 0 };
+  if (rec.until > now) return res.status(429).json({ error: 'Too many wrong PINs. Try again in 15 minutes.' });
+
+  if (safeEqual(pin || '', ADMIN_PIN)) {
+    pinFailures.delete(req.ip);
+    return res.json({ ok: true });
+  }
+  rec.count += 1;
+  if (rec.count >= 8) { rec.until = now + 15 * 60 * 1000; rec.count = 0; }
+  pinFailures.set(req.ip, rec);
+  res.status(401).json({ error: 'Wrong PIN' });
+});
 
 // ── Users ──────────────────────────────────────────────────
 app.get('/api/users', (req, res) => {
@@ -92,38 +177,37 @@ app.get('/api/users', (req, res) => {
 app.post('/api/users', (req, res) => {
   const data = loadData();
   const { name, emoji } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Enter your name' });
 
-  const existing = data.users.find(u => u.name.toLowerCase() === name.trim().toLowerCase());
+  const existing = findUser(data, name);
   if (existing) return res.json({ ...existing, isAdmin: isAdminName(existing.name) });
 
-  const user = { id: Date.now(), name: name.trim(), emoji: emoji || '🍛', joined: new Date().toISOString() };
+  const user = { id: nextId(), name: name.trim(), emoji: emoji || '🍛', joined: new Date().toISOString() };
   data.users.push(user);
   saveData(data);
   res.json({ ...user, isAdmin: isAdminName(user.name) });
 });
 
 // ── Restaurants ────────────────────────────────────────────
+function summariseRestaurant(data, r) {
+  const ratings = data.ratings.filter(rt => rt.restaurantId === r.id)
+    // Older ratings stored the text as "notes"; expose it as "summary" everywhere.
+    .map(rt => ({ ...rt, summary: rt.summary ?? rt.notes ?? '' }));
+  if (ratings.length === 0) {
+    return { ...r, ratings: [], avgScores: null, overallScore: null, ratingCount: 0 };
+  }
+  const avgScores = {};
+  for (const k of METRIC_KEYS) avgScores[k] = avg(ratings.map(rt => rt[k]));
+  const overallScore = Math.round(avg(Object.values(avgScores)) * 10) / 10;
+  return { ...r, ratings, avgScores, overallScore, ratingCount: ratings.length };
+}
+
 app.get('/api/restaurants', (req, res) => {
   const data = loadData();
-
-  const restaurants = data.restaurants.map(r => {
-    const ratings = data.ratings.filter(rt => rt.restaurantId === r.id);
-    if (ratings.length === 0) {
-      return { ...r, ratings: [], avgScores: null, overallScore: null, ratingCount: 0 };
-    }
-    const avgScores = {
-      poppadoms: avg(ratings.map(rt => rt.poppadoms)),
-      main:      avg(ratings.map(rt => rt.main)),
-      price:     avg(ratings.map(rt => rt.price)),
-      vibe:      avg(ratings.map(rt => rt.vibe)),
-      service:   avg(ratings.map(rt => rt.service)),
-    };
-    const overallScore = Math.round(avg(Object.values(avgScores)) * 10) / 10;
-    return { ...r, ratings, avgScores, overallScore, ratingCount: ratings.length };
-  });
+  const restaurants = data.restaurants.map(r => summariseRestaurant(data, r));
 
   restaurants.sort((a, b) => {
+    if (a.overallScore === null && b.overallScore === null) return a.name.localeCompare(b.name);
     if (a.overallScore === null) return 1;
     if (b.overallScore === null) return -1;
     return b.overallScore - a.overallScore;
@@ -132,18 +216,33 @@ app.get('/api/restaurants', (req, res) => {
   res.json(restaurants);
 });
 
+// Admin only: name, location and added-by are required; photo is optional.
 app.post('/api/restaurants', (req, res) => {
   const data = loadData();
-  const { name, location, addedBy } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Restaurant name is required' });
+  const { name, location, addedBy, photo, requestingUser } = req.body;
+
+  if (!isAdminRequest(req, requestingUser)) {
+    return res.status(403).json({ error: 'Only the admin can add restaurants' });
+  }
+  if (!name || !name.trim())         return res.status(400).json({ error: 'Add the restaurant name' });
+  if (!location || !location.trim()) return res.status(400).json({ error: 'Add the location' });
+  if (!addedBy || !findUser(data, addedBy)) return res.status(400).json({ error: 'Choose who added it' });
+  if (data.restaurants.some(r => norm(r.name) === norm(name) && norm(r.location) === norm(location))) {
+    return res.status(400).json({ error: `${name.trim()} in ${location.trim()} is already on the board` });
+  }
+  if (photo) {
+    const err = photoError(photo);
+    if (err) return res.status(400).json({ error: err });
+  }
 
   const restaurant = {
-    id: Date.now(),
+    id: nextId(),
     name: name.trim(),
-    location: location || '',
-    addedBy: addedBy || '',
+    location: location.trim(),
+    addedBy: findUser(data, addedBy).name,
     addedAt: new Date().toISOString(),
   };
+  if (photo) restaurant.photoUrl = photo;
   data.restaurants.push(restaurant);
   saveData(data);
   res.json(restaurant);
@@ -152,32 +251,41 @@ app.post('/api/restaurants', (req, res) => {
 // ── Ratings ────────────────────────────────────────────────
 app.post('/api/ratings', (req, res) => {
   const data = loadData();
-  const { restaurantId, userName, poppadoms, main, price, vibe, service, notes, visitDate } = req.body;
+  const { restaurantId, userName, summary, visitDate, requestingUser } = req.body;
 
-  const existing = data.ratings.find(r => r.restaurantId === restaurantId && r.userName === userName);
+  const restaurant = data.restaurants.find(r => r.id === Number(restaurantId));
+  if (!restaurant) return res.status(400).json({ error: 'Choose a restaurant' });
+
+  const user = findUser(data, userName);
+  if (!user) return res.status(400).json({ error: 'Choose who is rating' });
+
+  // You rate as yourself; only the admin can enter a rating on someone else's behalf.
+  const requester = requestingUser || userName;
+  if (norm(requester) !== norm(user.name) && !isAdminRequest(req, requester)) {
+    return res.status(403).json({ error: 'You can only rate as yourself' });
+  }
+
+  const existing = data.ratings.find(r => r.restaurantId === restaurant.id && norm(r.userName) === norm(user.name));
   if (existing) {
-    return res.status(400).json({ error: `${userName} has already rated this restaurant! One entry per curry house, you greedy naan-grabber 🫓` });
+    return res.status(409).json({
+      error: `${user.name} has already rated ${restaurant.name}. Edit that rating instead.`,
+      existingRatingId: existing.id,
+    });
   }
 
-  for (const [key, val] of Object.entries({ poppadoms, main, price, vibe, service })) {
-    if (val === undefined || val === null || Number(val) < 0 || Number(val) > 10) {
-      return res.status(400).json({ error: `Invalid score for ${key}` });
-    }
-  }
+  const sErr = scoreError(req.body);
+  if (sErr) return res.status(400).json({ error: sErr });
+  if (!summary || !String(summary).trim()) return res.status(400).json({ error: 'Add a summary' });
 
   const rating = {
-    id: Date.now(),
-    restaurantId,
-    userName,
-    poppadoms: Number(poppadoms),
-    main:      Number(main),
-    price:     Number(price),
-    vibe:      Number(vibe),
-    service:   Number(service),
-    notes:     notes || '',
+    id: nextId(),
+    restaurantId: restaurant.id,
+    userName: user.name,
+    summary:  String(summary).trim(),
     visitDate: visitDate || new Date().toISOString().split('T')[0],
     createdAt: new Date().toISOString(),
   };
+  for (const k of METRIC_KEYS) rating[k] = roundScore(req.body[k]);
   data.ratings.push(rating);
   saveData(data);
   res.json(rating);
@@ -187,28 +295,23 @@ app.put('/api/ratings/:id', (req, res) => {
   const data = loadData();
   const id = Number(req.params.id);
   const rating = data.ratings.find(r => r.id === id);
-  if (!rating) return res.status(404).json({ error: 'Rating not found' });
+  if (!rating) return res.status(404).json({ error: 'That rating no longer exists' });
 
-  const { requestingUser, poppadoms, main, price, vibe, service, notes, visitDate } = req.body;
-  if (requestingUser !== rating.userName && !isAdminName(requestingUser)) {
-    return res.status(403).json({ error: 'Only the original rater or an admin can amend this rating' });
+  const { requestingUser, summary, visitDate } = req.body;
+  if (norm(requestingUser) !== norm(rating.userName) && !isAdminRequest(req, requestingUser)) {
+    return res.status(403).json({ error: 'Only the person who rated, or the admin, can edit this' });
   }
 
-  for (const [key, val] of Object.entries({ poppadoms, main, price, vibe, service })) {
-    if (val === undefined || val === null || Number(val) < 0 || Number(val) > 10) {
-      return res.status(400).json({ error: `Invalid score for ${key}` });
-    }
-  }
+  const sErr = scoreError(req.body);
+  if (sErr) return res.status(400).json({ error: sErr });
+  if (!summary || !String(summary).trim()) return res.status(400).json({ error: 'Add a summary' });
 
-  rating.poppadoms = Number(poppadoms);
-  rating.main      = Number(main);
-  rating.price     = Number(price);
-  rating.vibe      = Number(vibe);
-  rating.service   = Number(service);
-  rating.notes     = notes || '';
+  for (const k of METRIC_KEYS) rating[k] = roundScore(req.body[k]);
+  rating.summary   = String(summary).trim();
+  delete rating.notes;
   rating.visitDate = visitDate || rating.visitDate;
   rating.editedAt  = new Date().toISOString();
-  rating.editedBy  = requestingUser;
+  rating.editedBy  = (findUser(data, requestingUser) || {}).name || requestingUser;
 
   saveData(data);
   res.json(rating);
@@ -218,12 +321,12 @@ app.delete('/api/ratings/:id', (req, res) => {
   const data = loadData();
   const id = Number(req.params.id);
   const idx = data.ratings.findIndex(r => r.id === id);
-  if (idx === -1) return res.status(404).json({ error: 'Rating not found' });
+  if (idx === -1) return res.status(404).json({ error: 'That rating no longer exists' });
 
   const { requestingUser } = req.body || {};
   const rating = data.ratings[idx];
-  if (requestingUser !== rating.userName && !isAdminName(requestingUser)) {
-    return res.status(403).json({ error: 'Only the original rater or an admin can delete this rating' });
+  if (norm(requestingUser) !== norm(rating.userName) && !isAdminRequest(req, requestingUser)) {
+    return res.status(403).json({ error: 'Only the person who rated, or the admin, can delete this' });
   }
 
   data.ratings.splice(idx, 1);
@@ -231,27 +334,116 @@ app.delete('/api/ratings/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ── Restaurant photos ────────────────────────────────────────
+// ── Restaurant photos ──────────────────────────────────────
+// The restaurant photo is admin only; anyone in the crew can add the group photo.
 app.patch('/api/restaurants/:id/photo', (req, res) => {
   const data = loadData();
   const id = Number(req.params.id);
   const restaurant = data.restaurants.find(r => r.id === id);
   if (!restaurant) return res.status(404).json({ error: 'Restaurant not found' });
 
-  const { type, image } = req.body;
+  const { type, image, requestingUser } = req.body;
   if (type !== 'profile' && type !== 'group') {
     return res.status(400).json({ error: 'type must be "profile" or "group"' });
   }
-  if (!image || typeof image !== 'string' || !image.startsWith('data:image/')) {
-    return res.status(400).json({ error: 'image must be an image data URI' });
+  if (type === 'profile' && !isAdminRequest(req, requestingUser)) {
+    return res.status(403).json({ error: 'Only the admin can change the restaurant photo' });
   }
-  if (image.length > MAX_PHOTO_LEN) return res.status(400).json({ error: 'Image too large' });
+  if (type === 'group' && !findUser(data, requestingUser)) {
+    return res.status(403).json({ error: 'Pick your profile before adding a photo' });
+  }
+  const err = photoError(image);
+  if (err) return res.status(400).json({ error: err });
 
   if (type === 'profile') restaurant.photoUrl = image;
-  else restaurant.groupPhotoUrl = image;
+  else {
+    restaurant.groupPhotoUrl = image;
+    restaurant.groupPhotoBy  = findUser(data, requestingUser).name;
+  }
 
   saveData(data);
   res.json(restaurant);
+});
+
+// ── Bulk import (admin) ────────────────────────────────────
+// rows: [{ restaurant, location, date, person, poppadoms, main, price, vibe, service, summary }]
+// All rows are validated first; nothing is written if any row is invalid.
+// Restaurants and people are matched by name (case-insensitive) and created if missing.
+// A person who already rated a restaurant is skipped, never overwritten.
+// dryRun: true returns the same report without saving.
+app.post('/api/admin/import', (req, res) => {
+  const data = loadData();
+  const { rows, requestingUser, dryRun } = req.body || {};
+  if (!isAdminRequest(req, requestingUser)) return res.status(403).json({ error: 'Only the admin can import' });
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'Nothing to import' });
+  if (rows.length > 2000) return res.status(400).json({ error: 'Import at most 2,000 rows at a time' });
+
+  const errors = [];
+  rows.forEach((row, i) => {
+    const line = i + 1;
+    if (!row.restaurant || !String(row.restaurant).trim()) errors.push(`Row ${line}: restaurant name is missing`);
+    if (!row.person || !String(row.person).trim())         errors.push(`Row ${line}: person is missing`);
+    const sErr = scoreError(row);
+    if (sErr) errors.push(`Row ${line}: ${sErr}`);
+    if (row.date && !/^\d{4}-\d{2}-\d{2}$/.test(String(row.date).trim())) errors.push(`Row ${line}: date must be YYYY-MM-DD`);
+  });
+  if (errors.length) return res.status(400).json({ error: 'Some rows need fixing', errors });
+
+  const admin = findUser(data, requestingUser);
+  const newRestaurants = [], newUsers = [], newRatings = [], skipped = [];
+  const restaurantByKey = new Map(data.restaurants.map(r => [norm(r.name), r]));
+  const userByKey       = new Map(data.users.map(u => [norm(u.name), u]));
+  const rated           = new Set(data.ratings.map(r => `${r.restaurantId}|${norm(r.userName)}`));
+
+  rows.forEach((row, i) => {
+    const rName = String(row.restaurant).trim();
+    const pName = String(row.person).trim();
+
+    let restaurant = restaurantByKey.get(norm(rName));
+    if (!restaurant) {
+      restaurant = { id: nextId(), name: rName, location: String(row.location || '').trim(),
+                     addedBy: admin ? admin.name : '', addedAt: new Date().toISOString(), imported: true };
+      restaurantByKey.set(norm(rName), restaurant);
+      newRestaurants.push(restaurant);
+    } else if (!restaurant.location && row.location && newRestaurants.includes(restaurant)) {
+      restaurant.location = String(row.location).trim();
+    }
+
+    let user = userByKey.get(norm(pName));
+    if (!user) {
+      user = { id: nextId(), name: pName, emoji: '🍛', joined: new Date().toISOString(), imported: true };
+      userByKey.set(norm(pName), user);
+      newUsers.push(user);
+    }
+
+    const key = `${restaurant.id}|${norm(user.name)}`;
+    if (rated.has(key)) { skipped.push(`Row ${i + 1}: ${user.name} already rated ${restaurant.name}`); return; }
+    rated.add(key);
+
+    const rating = {
+      id: nextId(), restaurantId: restaurant.id, userName: user.name,
+      summary: String(row.summary || '').trim(),
+      visitDate: row.date ? String(row.date).trim() : '',
+      createdAt: new Date().toISOString(), imported: true,
+    };
+    for (const k of METRIC_KEYS) rating[k] = roundScore(row[k]);
+    newRatings.push(rating);
+  });
+
+  const report = {
+    dryRun: !!dryRun,
+    restaurantsCreated: newRestaurants.map(r => r.name),
+    usersCreated: newUsers.map(u => u.name),
+    ratingsCreated: newRatings.length,
+    skipped,
+  };
+  if (!dryRun) {
+    data.restaurants.push(...newRestaurants);
+    data.users.push(...newUsers);
+    data.ratings.push(...newRatings);
+    saveData(data);
+  }
+  res.json(report);
 });
 
 // ── Stats ──────────────────────────────────────────────────

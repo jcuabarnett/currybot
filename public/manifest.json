@@ -5,8 +5,8 @@
   "start_url": "/",
   "id": "/",
   "display": "standalone",
-  "background_color": "#0a0603",
-  "theme_color": "#f5a623",
+  "background_color": "#241016",
+  "theme_color": "#241016",
   "orientation": "portrait",
   "categories": ["food", "lifestyle", "social"],
   "icons": [
