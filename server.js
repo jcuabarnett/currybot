@@ -12,50 +12,109 @@ const DATA_FILE = path.join(__dirname, 'data.json');
 const ADMIN_PIN = (process.env.ADMIN_PIN || '').trim();
 if (!ADMIN_PIN) console.warn('⚠️  ADMIN_PIN is not set: anyone who picks the admin name can act as admin.');
 
-// ── In-memory store ────────────────────────────────────────
-// Loaded once at startup; writes go to Upstash (prod) or data.json (dev).
-// All routes stay synchronous — they just read/write the in-memory object.
+// ── Storage ────────────────────────────────────────────────
+// Prod: Upstash Redis. Dev: data.json plus a photos/ folder.
+//   currybot             → JSON blob of users, restaurants, ratings (no images)
+//   currybot:photo:<id>  → one image data URI per key
+// Keeping photos out of the blob means a rating save only sends a few KB.
+const USE_REDIS  = !!process.env.UPSTASH_REDIS_URL;
+const MAIN_KEY   = 'currybot';
+const PHOTO_DIR  = path.join(__dirname, 'photos');
+const photoKey   = id => `currybot:photo:${id}`;
+
+async function redis(...cmd) {
+  const res = await fetch(process.env.UPSTASH_REDIS_URL, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(cmd),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) throw new Error(`Upstash ${cmd[0]} failed: ${body.error || res.status}`);
+  return body.result;
+}
+
+// All routes stay synchronous against this in-memory copy.
 let DATA = { users: [], restaurants: [], ratings: [] };
 
 function loadData() { return DATA; }
 
 function saveData(data) {
   DATA = data;
-  if (process.env.UPSTASH_REDIS_URL) {
+  if (USE_REDIS) {
     // Fire-and-forget — routes don't wait for this
-    fetch(process.env.UPSTASH_REDIS_URL, {
-      method:  'POST',
-      headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify(['SET', 'currybot', JSON.stringify(data)]),
-    })
-      .then(async r => { if (!r.ok) console.error('Upstash write rejected:', r.status, await r.text()); })
-      .catch(err => console.error('Upstash write error:', err.message));
+    redis('SET', MAIN_KEY, JSON.stringify(data)).catch(err => console.error('Upstash write error:', err.message));
   } else {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   }
 }
 
-// Load persisted data before the server starts accepting requests
-async function initStorage() {
-  if (process.env.UPSTASH_REDIS_URL) {
+// Photos are written before anything points at them, so a failed upload never leaves a broken image.
+async function storePhoto(dataUri) {
+  const id = nextId();
+  if (USE_REDIS) await redis('SET', photoKey(id), dataUri);
+  else { fs.mkdirSync(PHOTO_DIR, { recursive: true }); fs.writeFileSync(path.join(PHOTO_DIR, `${id}.txt`), dataUri); }
+  return id;
+}
+async function readPhoto(id) {
+  if (USE_REDIS) return redis('GET', photoKey(id));
+  const f = path.join(PHOTO_DIR, `${id}.txt`);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+}
+function deletePhoto(id) {
+  if (!id) return;
+  if (USE_REDIS) redis('DEL', photoKey(id)).catch(err => console.error('Photo delete failed:', err.message));
+  else fs.rm(path.join(PHOTO_DIR, `${id}.txt`), { force: true }, () => {});
+}
+
+// ── One-off reset ──────────────────────────────────────────
+// Bumping RESET_VERSION wipes everything except the admin on the next start.
+// Version 1 (Oct 2026): fresh start before the redesign, keeping Johnny 👑 as admin.
+// The old data is copied to a backup key first; the wipe is skipped if that copy fails.
+const RESET_VERSION = 1;
+
+async function applyResetIfDue(rawBlob) {
+  if (DATA.resetVersion === RESET_VERSION) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  if (rawBlob) {
     try {
-      const res    = await fetch(process.env.UPSTASH_REDIS_URL, {
-        method:  'POST',
-        headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify(['GET', 'currybot']),
-      });
-      const { result } = await res.json();
-      if (result) DATA = JSON.parse(result);
-      console.log(`Loaded from Upstash (${DATA.restaurants.length} restaurants)`);
+      if (USE_REDIS) await redis('SET', `currybot:backup:${stamp}`, rawBlob);
+      else fs.writeFileSync(path.join(__dirname, `data.backup-${stamp}.json`), rawBlob);
+      console.log(`Backed up previous data to currybot:backup:${stamp}`);
     } catch (e) {
-      console.warn('Upstash load failed, starting fresh:', e.message);
+      console.error('Backup failed, so the reset was NOT applied. Old data kept:', e.message);
+      return;
     }
-  } else {
-    if (fs.existsSync(DATA_FILE)) {
-      try { DATA = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
-    }
-    console.log(`Loaded from local file (${DATA.restaurants.length} restaurants)`);
   }
+  const old   = (DATA.users || []).find(u => isAdminName(u.name));
+  const admin = { id: old ? old.id : nextId(), name: 'Johnny', emoji: '👑', joined: old ? old.joined : new Date().toISOString() };
+  DATA = { resetVersion: RESET_VERSION, users: [admin], restaurants: [], ratings: [] };
+  if (USE_REDIS) await redis('SET', MAIN_KEY, JSON.stringify(DATA));
+  else fs.writeFileSync(DATA_FILE, JSON.stringify(DATA, null, 2));
+  console.log('Reset applied: all data cleared except Johnny 👑 (admin)');
+}
+
+// Load persisted data before the server starts accepting requests.
+// If the database can't be read we stop rather than start empty: starting empty would let the
+// next save overwrite the real data. Render restarts the service automatically.
+async function initStorage() {
+  let raw = null;
+  if (USE_REDIS) {
+    try {
+      raw = await redis('GET', MAIN_KEY);
+    } catch (e) {
+      console.error('Could not load data from Upstash, refusing to start empty:', e.message);
+      process.exit(1);
+    }
+  } else if (fs.existsSync(DATA_FILE)) {
+    raw = fs.readFileSync(DATA_FILE, 'utf8');
+  }
+  if (raw) {
+    try { DATA = JSON.parse(raw); }
+    catch (e) { console.error('Stored data is not valid JSON, refusing to start:', e.message); process.exit(1); }
+  }
+  DATA.users ||= []; DATA.restaurants ||= []; DATA.ratings ||= [];
+  await applyResetIfDue(raw);
+  console.log(`Loaded ${DATA.restaurants.length} restaurants, ${DATA.users.length} users from ${USE_REDIS ? 'Upstash' : 'local file'}`);
 }
 
 // Unique, increasing IDs. Date.now() alone collides when many records are created in the
@@ -189,7 +248,11 @@ app.post('/api/users', (req, res) => {
 });
 
 // ── Restaurants ────────────────────────────────────────────
-function summariseRestaurant(data, r) {
+function summariseRestaurant(data, raw) {
+  // Photo IDs are immutable (a new upload gets a new ID), so the URLs can be cached forever.
+  const { photoId, groupPhotoId, ...r } = raw;
+  if (photoId)      r.photoUrl      = `/photos/${photoId}`;
+  if (groupPhotoId) r.groupPhotoUrl = `/photos/${groupPhotoId}`;
   const ratings = data.ratings.filter(rt => rt.restaurantId === r.id)
     // Older ratings stored the text as "notes"; expose it as "summary" everywhere.
     .map(rt => ({ ...rt, summary: rt.summary ?? rt.notes ?? '' }));
@@ -217,7 +280,7 @@ app.get('/api/restaurants', (req, res) => {
 });
 
 // Admin only: name, location and added-by are required; photo is optional.
-app.post('/api/restaurants', (req, res) => {
+app.post('/api/restaurants', async (req, res) => {
   const data = loadData();
   const { name, location, addedBy, photo, requestingUser } = req.body;
 
@@ -235,6 +298,12 @@ app.post('/api/restaurants', (req, res) => {
     if (err) return res.status(400).json({ error: err });
   }
 
+  let photoId;
+  if (photo) {
+    try { photoId = await storePhoto(photo); }
+    catch (e) { console.error(e.message); return res.status(502).json({ error: "The photo couldn't be saved. Try again, or add it later." }); }
+  }
+
   const restaurant = {
     id: nextId(),
     name: name.trim(),
@@ -242,10 +311,10 @@ app.post('/api/restaurants', (req, res) => {
     addedBy: findUser(data, addedBy).name,
     addedAt: new Date().toISOString(),
   };
-  if (photo) restaurant.photoUrl = photo;
+  if (photoId) restaurant.photoId = photoId;
   data.restaurants.push(restaurant);
   saveData(data);
-  res.json(restaurant);
+  res.json(summariseRestaurant(data, restaurant));
 });
 
 // ── Ratings ────────────────────────────────────────────────
@@ -336,7 +405,7 @@ app.delete('/api/ratings/:id', (req, res) => {
 
 // ── Restaurant photos ──────────────────────────────────────
 // The restaurant photo is admin only; anyone in the crew can add the group photo.
-app.patch('/api/restaurants/:id/photo', (req, res) => {
+app.patch('/api/restaurants/:id/photo', async (req, res) => {
   const data = loadData();
   const id = Number(req.params.id);
   const restaurant = data.restaurants.find(r => r.id === id);
@@ -355,14 +424,33 @@ app.patch('/api/restaurants/:id/photo', (req, res) => {
   const err = photoError(image);
   if (err) return res.status(400).json({ error: err });
 
-  if (type === 'profile') restaurant.photoUrl = image;
-  else {
-    restaurant.groupPhotoUrl = image;
-    restaurant.groupPhotoBy  = findUser(data, requestingUser).name;
-  }
+  let newId;
+  try { newId = await storePhoto(image); }
+  catch (e) { console.error(e.message); return res.status(502).json({ error: "The photo couldn't be saved. Try again." }); }
 
+  const field = type === 'profile' ? 'photoId' : 'groupPhotoId';
+  const oldId = restaurant[field];
+  restaurant[field] = newId;
+  if (type === 'group') restaurant.groupPhotoBy = findUser(data, requestingUser).name;
   saveData(data);
-  res.json(restaurant);
+  deletePhoto(oldId);
+  res.json(summariseRestaurant(data, restaurant));
+});
+
+// Serves a stored photo as a real image file. IDs never change, so browsers cache them for a year.
+app.get('/photos/:id', async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(404).end();
+  try {
+    const uri = await readPhoto(req.params.id);
+    const m = uri && uri.match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
+    if (!m) return res.status(404).end();
+    res.setHeader('Content-Type', m[1]);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(Buffer.from(m[2], 'base64'));
+  } catch (e) {
+    console.error('Photo read failed:', e.message);
+    res.status(502).end();
+  }
 });
 
 // ── Bulk import (admin) ────────────────────────────────────

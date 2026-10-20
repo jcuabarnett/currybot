@@ -742,6 +742,11 @@ async function loadAll() {
   if (state.user) {
     const fresh = users.find(u => u.id === state.user.id) || users.find(u => norm(u.name) === norm(state.user.name));
     if (fresh) { state.user = fresh; lsSet('currybot_user', JSON.stringify(fresh)); }
+    else {
+      // The saved profile no longer exists (e.g. after a data reset): ask them to pick again.
+      state.user = null; state.adminVerified = false; lsDel('currybot_user');
+      refreshChrome();
+    }
   }
 }
 
