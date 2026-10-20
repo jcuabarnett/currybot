@@ -585,6 +585,7 @@ const METRICS = {
   service:   { label: 'Service',   emoji: '🤵' },
 };
 const KEYS = Object.keys(METRICS);
+const APP_VERSION = 'v4';
 
 const ACHIEVEMENTS = [
   { id:'first_bite',    emoji:'🍽️', name:'First bite' },
@@ -1348,6 +1349,11 @@ function earnedBadges(r) {
 }
 
 function renderMe() {
+  renderMeBody();
+  document.getElementById('me-content').insertAdjacentHTML('beforeend',
+    `<p style="text-align:center;color:var(--text-3);font-size:13px;margin-top:32px">CurryBot ${APP_VERSION}</p>`);
+}
+function renderMeBody() {
   const el = document.getElementById('me-content');
   if (!state.user) {
     el.innerHTML = `<div class="empty"><div class="icon">👤</div><h3>Who are you?</h3><p>Pick your profile to see your ratings and badges.</p>
@@ -1491,7 +1497,14 @@ function doInstall() {
 // INIT
 // ═══════════════════════════════════════════════════════════
 async function init() {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW:', err));
+  // Always check for a new version: on open, and whenever the app comes back to the foreground
+  // (home-screen apps on iPhone resume without reloading).
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(reg => {
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(err => console.warn('SW:', err));
+  }
   setupInstall();
 
   try { const saved = lsGet('currybot_user'); if (saved) state.user = JSON.parse(saved); } catch {}

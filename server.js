@@ -566,7 +566,8 @@ app.get('/api/stats', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 initStorage().then(() => {
-  app.listen(PORT, () => {
+  // Bind to all IPv4 interfaces explicitly; Render's port detection expects 0.0.0.0.
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🍛  CurryBot is serving hot at http://localhost:${PORT}\n`);
   });
 });

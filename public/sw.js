@@ -1,28 +1,31 @@
-// Bump CACHE whenever the shell list changes. The page itself is fetched network-first,
-// so normal deploys show up on the next open without a bump.
-const CACHE = 'currybot-v3';
+// Bump CACHE on every release that must reach installed apps immediately.
+// When a new version activates it clears old caches and reloads any open app windows,
+// so phones pick up the update on their own.
+const CACHE = 'currybot-v4';
 
 const SHELL = [
   '/',
   '/manifest.json',
   '/icons/icon.svg',
-  'https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Shrikhand&display=swap',
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE)
-      .then(cache => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
-  );
+  self.skipWaiting();
+  // Pre-caching is best-effort: a failed request must never block the update.
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+  e.waitUntil((async () => {
+    const old = (await caches.keys()).filter(k => k !== CACHE);
+    await Promise.all(old.map(k => caches.delete(k)));
+    await self.clients.claim();
+    // Upgrading from an older version: reload open windows so they show the new app now.
+    if (old.length) {
+      const wins = await self.clients.matchAll({ type: 'window' });
+      await Promise.all(wins.map(w => w.navigate(w.url).catch(() => {})));
+    }
+  })());
 });
 
 function putInCache(req, res) {
@@ -44,13 +47,13 @@ self.addEventListener('fetch', e => {
   // The app page: network first so new versions appear straight away; cache when offline.
   if (req.mode === 'navigate' || (url.origin === location.origin && url.pathname === '/')) {
     e.respondWith(
-      fetch(req).then(res => putInCache(req, res))
+      fetch(req, { cache: 'no-store' }).then(res => putInCache(req, res))
         .catch(() => caches.match(req).then(c => c || caches.match('/')))
     );
     return;
   }
 
-  // Everything else (icons, fonts): cache first.
+  // Everything else (icons, fonts, photos): cache first.
   e.respondWith(
     caches.match(req).then(cached => cached || fetch(req).then(res => putInCache(req, res)))
   );
