@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "description": "Rate curry houses with your mates 🍛",
   "main": "server.js",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2"
+  },
+  "overrides": {
+    "qs": "^6.16.1"
   }
 }
